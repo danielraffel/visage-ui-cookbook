@@ -1,3 +1,1103 @@
+# Visage UI Framework Migration Guide for AI Assistants
+
+*A comprehensive guide for AI assistants helping developers migrate from JUCE to Visage or create new Visage UIs*
+
+## Overview
+
+Visage is a modern GPU-accelerated UI framework using bgfx for cross-platform rendering. This guide helps AI assistants understand key differences from JUCE and provide effective migration assistance.
+
+## Quick Start - Minimal Working Example
+
+```cpp
+// MinimalVisagePlugin.h - Start here!
+class MinimalVisagePlugin : public juce::AudioProcessor {
+public:
+    juce::AudioProcessorEditor* createEditor() override {
+        return new MinimalVisageEditor(*this);
+    }
+};
+
+// MinimalVisageEditor.h
+class MinimalVisageEditor : public juce::AudioProcessorEditor {
+    class VisageComponent : public juce::Component {
+        std::unique_ptr<visage::ApplicationWindow> visageWindow;
+        
+    public:
+        VisageComponent() {
+            setOpaque(true);
+        }
+        
+        void paint(juce::Graphics& g) override {
+            // Step 1: Get native window handle
+            if (auto* peer = getPeer()) {
+                void* nativeHandle = peer->getNativeHandle();
+                
+                // Step 2: Initialize Visage if needed
+                if (!visageWindow) {
+                    visageWindow = createPluginWindow(getWidth(), getHeight(), nativeHandle);
+                    visage::Renderer::instance().checkInitialization(
+                        visageWindow->initWindow(), 
+                        visageWindow->globalDisplay()
+                    );
+                }
+                
+                // Step 3: Simple Visage rendering
+                visage::Canvas canvas;
+                canvas.pairToWindow(visageWindow->nativeHandle(), getWidth(), getHeight());
+                canvas.setColor(0xff0080ff); // Blue
+                canvas.fill(0, 0, getWidth(), getHeight());
+                canvas.submit();
+            }
+        }
+        
+        void resized() override {
+            if (visageWindow) {
+                // Update Visage window size
+                visageWindow->resize(getWidth(), getHeight());
+            }
+        }
+    };
+    
+    VisageComponent visageComponent;
+    
+public:
+    MinimalVisageEditor(juce::AudioProcessor& p) 
+        : AudioProcessorEditor(p) {
+        addAndMakeVisible(visageComponent);
+        setSize(400, 300);
+    }
+    
+    void resized() override {
+        visageComponent.setBounds(getLocalBounds());
+    }
+};
+```
+
+## Core Architecture Differences
+
+### Component Hierarchy
+- **JUCE**: `Component` base class with `addAndMakeVisible()`
+- **Visage**: `Frame` base class with `addChild()` or `addSubFrame()`
+- **Key**: Visage uses smart pointers and explicit parent-child relationships
+
+```cpp
+// JUCE
+addAndMakeVisible(button);
+
+// Visage
+button = std::make_unique<visage::Button>();
+addChild(button.get());
+// or
+addChild(std::move(button));
+```
+
+### Drawing System
+- **JUCE**: `paint(Graphics& g)` method
+- **Visage**: `draw(Canvas& canvas)` method with GPU acceleration
+- **Key**: Canvas uses immediate mode rendering with state management
+
+```cpp
+// JUCE
+void paint(Graphics& g) override {
+    g.setColour(Colours::blue);
+    g.fillRect(bounds);
+}
+
+// Visage
+void draw(Canvas& canvas) override {
+    canvas.setColor(0xff0000ff);
+    canvas.fill(0, 0, width(), height());
+}
+```
+
+### Event Handling
+- **JUCE**: Virtual methods (`mouseDown`, `keyPressed`) and listener interfaces
+- **Visage**: Lambda callbacks and virtual methods
+- **Key**: Visage callbacks are more functional programming oriented
+
+```cpp
+// JUCE
+button.onClick = [this] { handleClick(); };
+
+// Visage
+button->onMouseDown() += [this](const MouseEvent& e) { handleClick(); };
+```
+
+## Critical Plugin Integration Patterns
+
+### Window Embedding (Most Important)
+For plugins, **never** use `ApplicationWindow` - use the bridge pattern:
+
+```cpp
+// CORRECT: Plugin window embedding
+auto window = createPluginWindow(width, height, hostParentHandle);
+visage::Renderer::instance().checkInitialization(window->initWindow(), window->globalDisplay());
+canvas.pairToWindow(window->nativeHandle(), width, height);
+
+// WRONG: Using ApplicationWindow in plugins
+auto appWindow = std::make_unique<visage::ApplicationWindow>();
+appWindow->show(hostParentHandle); // This will fail
+```
+
+### Platform-Specific Handles
+- **Windows**: `HWND` with `WS_CHILD` flag
+- **macOS**: `NSView*` added as subview to parent
+- **Linux**: X11 window with parent window ID
+
+### Core Integration Bridge
+
+```cpp
+// JuceVisageBridge.h
+class JuceVisageBridge : public juce::Component,
+                        public visage::Frame {
+public:
+    JuceVisageBridge() {
+        // Initialize Visage graphics context
+        visage_canvas_ = std::make_unique<visage::Canvas>();
+        
+        // Set up proper lifecycle coordination
+        setOpaque(true);
+        setBufferedToImage(false); // Avoid JUCE's software buffering
+    }
+    
+    // JUCE Component overrides
+    void paint(juce::Graphics& g) override {
+        // Delegate to Visage rendering
+        renderVisageContent(g);
+    }
+    
+    void resized() override {
+        // Coordinate sizing between JUCE and Visage
+        auto bounds = getLocalBounds();
+        visage_canvas_->setDimensions(bounds.getWidth(), bounds.getHeight());
+        setBounds(bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight());
+        
+        // Trigger Visage layout
+        computeLayout();
+    }
+    
+    // Visage Frame overrides
+    void draw(visage::Canvas& canvas) override {
+        // Your Visage UI rendering here
+        drawVisageUI(canvas);
+    }
+    
+private:
+    void renderVisageContent(juce::Graphics& juceGraphics) {
+        // Get the native graphics context from JUCE
+        auto nativeContext = extractNativeContext(juceGraphics);
+        
+        // Initialize Visage renderer with native context
+        if (!visage_initialized_) {
+            initializeVisageRenderer(nativeContext);
+            visage_initialized_ = true;
+        }
+        
+        // Submit Visage rendering commands
+        int submit_pass = 0;
+        submit_pass = visage_canvas_->submit(submit_pass);
+    }
+    
+    std::unique_ptr<visage::Canvas> visage_canvas_;
+    bool visage_initialized_ = false;
+};
+```
+
+## Missing Visage Components (Create These)
+
+### Label Component
+Visage doesn't have a built-in Label. Create one:
+
+```cpp
+class VisageLabel : public visage::Frame {
+public:
+    void setText(const std::string& text) { text_ = text; redraw(); }
+    void draw(visage::Canvas& canvas) override {
+        visage::String visageText(text_.c_str());
+        canvas.text(visageText, *font_, justification_, 0, 0, width(), height());
+    }
+private:
+    std::string text_;
+    std::unique_ptr<visage::Font> font_;
+    visage::Font::Justification justification_ = visage::Font::kLeft;
+};
+```
+
+### Production-Ready Knob Component
+
+```cpp
+// VisageKnob.h - Production-ready knob component
+class VisageKnob : public visage::Frame, 
+                   public juce::Timer {
+private:
+    float value_ = 0.0f;
+    float targetValue_ = 0.0f;
+    float animationSpeed_ = 0.1f;
+    
+    // Visual state
+    bool isHovered_ = false;
+    bool isDragging_ = false;
+    float glowAmount_ = 0.0f;
+    
+    // Drag handling
+    visage::Point dragStartPos_;
+    float dragStartValue_ = 0.0f;
+    
+    // Callbacks
+    std::function<void(float)> onValueChanged_;
+    
+public:
+    VisageKnob() {
+        startTimerHz(60); // 60 FPS animation
+    }
+    
+    void setValue(float newValue, bool animate = true) {
+        targetValue_ = std::clamp(newValue, 0.0f, 1.0f);
+        if (!animate) {
+            value_ = targetValue_;
+            if (onValueChanged_) onValueChanged_(value_);
+        }
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        const float centerX = width() / 2.0f;
+        const float centerY = height() / 2.0f;
+        const float radius = std::min(width(), height()) * 0.4f;
+        
+        // Animated glow effect
+        if (isHovered_ || isDragging_) {
+            canvas.pushEffect(std::make_unique<visage::BloomEffect>(glowAmount_));
+        }
+        
+        // Background circle
+        canvas.setColor(0xff202020);
+        canvas.circle(centerX, centerY, radius);
+        
+        // Value arc
+        const float startAngle = -135.0f * (M_PI / 180.0f);
+        const float endAngle = 135.0f * (M_PI / 180.0f);
+        const float valueAngle = startAngle + (endAngle - startAngle) * value_;
+        
+        canvas.setColor(0xff00a0ff);
+        canvas.setLineWidth(3.0f);
+        canvas.arc(centerX, centerY, radius * 0.8f, startAngle, valueAngle);
+        
+        // Center dot
+        canvas.setColor(isDragging_ ? 0xffffffff : 0xffa0a0a0);
+        canvas.circle(centerX, centerY, radius * 0.15f);
+        
+        // Value text
+        auto* font = FontManager::instance().getFont(
+            FontManager::FontType::Regular, 12.0f);
+        std::string valueText = std::to_string(static_cast<int>(value_ * 100)) + "%";
+        visage::String visageText(valueText.c_str());
+        canvas.setColor(0xffffffff);
+        canvas.text(visageText, *font, visage::Font::kCenter, 
+                   0, height() - 20, width(), 20);
+        
+        if (isHovered_ || isDragging_) {
+            canvas.popEffect();
+        }
+    }
+    
+    void onMouseEnter(const visage::MouseEvent& e) override {
+        isHovered_ = true;
+        redraw();
+    }
+    
+    void onMouseExit(const visage::MouseEvent& e) override {
+        isHovered_ = false;
+        redraw();
+    }
+    
+    void onMouseDown(const visage::MouseEvent& e) override {
+        isDragging_ = true;
+        dragStartPos_ = e.position;
+        dragStartValue_ = value_;
+        redraw();
+    }
+    
+    void onMouseDrag(const visage::MouseEvent& e) override {
+        if (isDragging_) {
+            // Vertical drag for value change
+            float deltaY = (dragStartPos_.y - e.position.y) / 100.0f;
+            setValue(dragStartValue_ + deltaY);
+            redraw();
+        }
+    }
+    
+    void onMouseUp(const visage::MouseEvent& e) override {
+        isDragging_ = false;
+        redraw();
+    }
+    
+    void timerCallback() override {
+        // Smooth value animation
+        if (std::abs(value_ - targetValue_) > 0.001f) {
+            value_ += (targetValue_ - value_) * animationSpeed_;
+            if (onValueChanged_) onValueChanged_(value_);
+            redraw();
+        }
+        
+        // Glow animation
+        float targetGlow = (isHovered_ || isDragging_) ? 0.5f : 0.0f;
+        if (std::abs(glowAmount_ - targetGlow) > 0.001f) {
+            glowAmount_ += (targetGlow - glowAmount_) * 0.1f;
+            redraw();
+        }
+    }
+};
+```
+
+### Drag and Drop System
+Visage has basic drag/drop but needs custom implementation for complex scenarios:
+
+```cpp
+class VisageDragDropManager {
+public:
+    void startDrag(Frame* source, const std::string& data);
+    void updateDragPosition(Point position);
+    void finishDrag(Frame* target);
+private:
+    Frame* dragSource_ = nullptr;
+    std::unique_ptr<Frame> dragPreview_;
+    std::string dragData_;
+};
+```
+
+## API Translation Patterns
+
+### Bounds and Positioning
+```cpp
+// JUCE
+auto bounds = getLocalBounds();
+setBounds(x, y, width, height);
+
+// Visage
+auto bounds = localBounds(); // or use width()/height()
+setBounds(x, y, width, height); // Same signature
+```
+
+### Colors and Theming
+```cpp
+// JUCE
+g.setColour(Colours::blue);
+
+// Visage
+canvas.setColor(0xff0000ff); // ARGB hex
+// or use theme system
+canvas.setColor(theme.button.normal);
+```
+
+### Mouse Events
+```cpp
+// JUCE MouseEvent
+event.getMouseDownX(), event.getMouseDownY()
+event.mods.isLeftButtonDown()
+
+// Visage MouseEvent  
+event.position.x, event.position.y
+event.button_state & kMouseButtonLeft // Note: button_state not buttons
+```
+
+### Text and Fonts
+```cpp
+// JUCE
+g.drawText(text, bounds, Justification::centred);
+
+// Visage
+visage::String visageText(text.c_str());
+canvas.text(visageText, *font, visage::Font::kCenter, x, y, width, height);
+```
+
+## Font System Implementation
+
+### Font Embedding Strategy
+1. Convert TTF files to C++ headers using Python script
+2. Create font manager with size-based caching
+3. Use Visage's Font constructor with embedded data
+
+```cpp
+// Font loading
+auto font = std::make_unique<visage::Font>(size, fontData, dataSize);
+
+// Text rendering with proper string conversion
+visage::String visageText(text.c_str());
+canvas.text(visageText, *font, visage::Font::kCenter, x, y, width, height);
+```
+
+### Font Embedding Process
+
+#### Step 1: Convert TTF/OTF to C++ Headers
+```python
+# font_converter.py
+import os
+import sys
+
+def convert_font_to_header(font_path, output_path):
+    """Convert font file to C++ header with binary data"""
+    font_name = os.path.splitext(os.path.basename(font_path))[0]
+    
+    with open(font_path, 'rb') as f:
+        font_data = f.read()
+    
+    with open(output_path, 'w') as f:
+        f.write(f"// Auto-generated from {font_path}\n")
+        f.write(f"#pragma once\n\n")
+        f.write(f"static const unsigned char {font_name}_data[] = {{\n")
+        
+        # Write bytes in hex format
+        for i, byte in enumerate(font_data):
+            if i % 16 == 0:
+                f.write("    ")
+            f.write(f"0x{byte:02x}, ")
+            if (i + 1) % 16 == 0:
+                f.write("\n")
+        
+        f.write("\n};\n\n")
+        f.write(f"static const size_t {font_name}_size = {len(font_data)};\n")
+```
+
+#### Step 2: Font Manager Implementation
+```cpp
+// FontManager.h
+class FontManager {
+public:
+    static FontManager& instance() {
+        static FontManager instance;
+        return instance;
+    }
+    
+    // Cache fonts by size to avoid recreation
+    visage::Font* getFont(FontType type, float size) {
+        FontKey key{type, size};
+        
+        auto it = fontCache_.find(key);
+        if (it != fontCache_.end()) {
+            return it->second.get();
+        }
+        
+        // Create new font
+        auto font = createFont(type, size);
+        auto* fontPtr = font.get();
+        fontCache_[key] = std::move(font);
+        return fontPtr;
+    }
+    
+    // Support for different font weights/styles
+    enum class FontType {
+        Regular,
+        Bold,
+        Italic,
+        Light,
+        Medium,
+        // Icon fonts
+        MaterialIcons,
+        FontAwesome
+    };
+    
+private:
+    struct FontKey {
+        FontType type;
+        float size;
+        
+        bool operator<(const FontKey& other) const {
+            return std::tie(type, size) < std::tie(other.type, other.size);
+        }
+    };
+    
+    std::map<FontKey, std::unique_ptr<visage::Font>> fontCache_;
+    
+    std::unique_ptr<visage::Font> createFont(FontType type, float size) {
+        switch (type) {
+            case FontType::Regular:
+                return std::make_unique<visage::Font>(size, 
+                    roboto_regular_data, roboto_regular_size);
+            case FontType::Bold:
+                return std::make_unique<visage::Font>(size, 
+                    roboto_bold_data, roboto_bold_size);
+            case FontType::MaterialIcons:
+                return std::make_unique<visage::Font>(size, 
+                    material_icons_data, material_icons_size);
+            // ... other font types
+        }
+    }
+};
+```
+
+### Text Rendering Patterns
+
+#### Basic Text Rendering
+```cpp
+void drawText(visage::Canvas& canvas, const std::string& text, 
+              float x, float y, float width, float height) {
+    // CRITICAL: Always convert std::string to visage::String
+    visage::String visageText(text.c_str());
+    
+    auto* font = FontManager::instance().getFont(
+        FontManager::FontType::Regular, 14.0f);
+    
+    canvas.text(visageText, *font, 
+        visage::Font::kCenter,  // Justification
+        x, y, width, height);   // Bounds
+}
+```
+
+#### Advanced Text Rendering with State
+```cpp
+class TextRenderer {
+public:
+    struct TextStyle {
+        FontManager::FontType fontType = FontManager::FontType::Regular;
+        float fontSize = 14.0f;
+        uint32_t color = 0xffffffff;
+        visage::Font::Justification justification = visage::Font::kLeft;
+        float lineHeight = 1.2f;
+        float letterSpacing = 0.0f;
+    };
+    
+    void drawStyledText(visage::Canvas& canvas, 
+                       const std::string& text,
+                       const TextStyle& style,
+                       float x, float y, float width, float height) {
+        auto* font = FontManager::instance().getFont(style.fontType, style.fontSize);
+        
+        canvas.save();
+        canvas.setColor(style.color);
+        
+        // Handle multi-line text manually if needed
+        if (text.find('\n') != std::string::npos) {
+            drawMultilineText(canvas, text, style, font, x, y, width, height);
+        } else {
+            visage::String visageText(text.c_str());
+            canvas.text(visageText, *font, style.justification, x, y, width, height);
+        }
+        
+        canvas.restore();
+    }
+    
+private:
+    void drawMultilineText(visage::Canvas& canvas,
+                          const std::string& text,
+                          const TextStyle& style,
+                          visage::Font* font,
+                          float x, float y, float width, float height) {
+        std::istringstream stream(text);
+        std::string line;
+        float lineY = y;
+        float lineHeight = style.fontSize * style.lineHeight;
+        
+        while (std::getline(stream, line)) {
+            visage::String visageLine(line.c_str());
+            canvas.text(visageLine, *font, style.justification, 
+                       x, lineY, width, lineHeight);
+            lineY += lineHeight;
+        }
+    }
+};
+```
+
+### Icon Font Support
+```cpp
+// MaterialIconsHelper.h
+namespace MaterialIcons {
+    // Define icon constants as UTF-8 strings
+    constexpr const char* SETTINGS = "\xEE\x8B\x8D";
+    constexpr const char* PLAY_ARROW = "\xEE\x80\xB7";
+    constexpr const char* PAUSE = "\xEE\x80\xB8";
+    constexpr const char* STOP = "\xEE\x80\xC7";
+    
+    void drawIcon(visage::Canvas& canvas, const char* icon, 
+                  float x, float y, float size, uint32_t color) {
+        auto* font = FontManager::instance().getFont(
+            FontManager::FontType::MaterialIcons, size);
+        
+        canvas.setColor(color);
+        visage::String iconString(icon);
+        canvas.text(iconString, *font, visage::Font::kCenter,
+                   x, y, size, size);
+    }
+}
+```
+
+### Font Metrics and Layout
+```cpp
+class TextLayoutHelper {
+public:
+    struct TextMetrics {
+        float width;
+        float height;
+        float ascent;
+        float descent;
+    };
+    
+    // Since Visage doesn't provide text metrics, approximate them
+    static TextMetrics measureText(const std::string& text, 
+                                  visage::Font* font,
+                                  float fontSize) {
+        // Approximations based on font size
+        // These ratios work for most fonts
+        TextMetrics metrics;
+        metrics.height = fontSize;
+        metrics.ascent = fontSize * 0.8f;
+        metrics.descent = fontSize * 0.2f;
+        
+        // Approximate width (monospace assumption)
+        // For proportional fonts, you'd need a character width table
+        float avgCharWidth = fontSize * 0.6f;
+        metrics.width = text.length() * avgCharWidth;
+        
+        return metrics;
+    }
+    
+    // Handle text truncation with ellipsis
+    static std::string truncateText(const std::string& text,
+                                   float maxWidth,
+                                   visage::Font* font,
+                                   float fontSize) {
+        auto metrics = measureText(text, font, fontSize);
+        if (metrics.width <= maxWidth) {
+            return text;
+        }
+        
+        const std::string ellipsis = "...";
+        auto ellipsisMetrics = measureText(ellipsis, font, fontSize);
+        float availableWidth = maxWidth - ellipsisMetrics.width;
+        
+        // Binary search for the right truncation point
+        size_t low = 0, high = text.length();
+        while (low < high) {
+            size_t mid = (low + high + 1) / 2;
+            auto truncated = text.substr(0, mid);
+            auto truncMetrics = measureText(truncated, font, fontSize);
+            
+            if (truncMetrics.width <= availableWidth) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        
+        return text.substr(0, low) + ellipsis;
+    }
+};
+```
+
+### Font Loading Best Practices
+
+```cpp
+// FontLoader.h - Lazy loading pattern
+class FontLoader {
+public:
+    // Load fonts on-demand to reduce memory usage
+    static void preloadEssentialFonts() {
+        // Only preload the most commonly used font/size combinations
+        FontManager::instance().getFont(FontManager::FontType::Regular, 14.0f);
+        FontManager::instance().getFont(FontManager::FontType::Bold, 16.0f);
+    }
+    
+    // For development: hot-reload fonts
+    #if DEBUG
+    static void reloadFonts() {
+        // Clear font cache and reload from disk
+        // Useful during development for testing different fonts
+    }
+    #endif
+};
+```
+
+## Theme System Best Practices
+
+### JSON-Based Themes
+Create extensible theme system with hot-reload for development:
+
+```cpp
+// Theme structure
+struct ColorDef {
+    Color normal, hover, active, disabled;
+};
+
+// Usage
+auto& theme = getThemeManager().getCurrentTheme();
+canvas.setColor(isMouseOver ? theme.button.hover : theme.button.normal);
+
+// Hot reload in debug builds
+#if DEBUG
+getThemeManager().enableHotReload(true);
+#endif
+```
+
+### State-Based Colors
+Support multiple color formats in JSON:
+```json
+{
+  "button": {
+    "normal": "#333333",
+    "hover": "#3d3d3d",
+    "active": "#2a2a2a", 
+    "disabled": "rgba(51, 51, 51, 0.5)"
+  }
+}
+```
+
+## Common Migration Pitfalls
+
+### 1. Namespace Conflicts
+- Remove Cocoa.h imports that conflict with visage::Point/String
+- Use forward declarations for platform types
+
+### 2. String Types
+- `visage::String` is not std::string - needs conversion
+- TextEditor returns visage::String, not std::u32string
+
+### 3. Event API Differences
+- MouseEvent: `button_state` not `buttons`
+- MouseEvent: `wheel_delta_x/y` not `wheelDelta`
+- KeyEvent constructor: `(key, mods, is_down, repeat)`
+
+### 4. Initialization Order
+```cpp
+// CORRECT: Initialize before setting palette
+rootFrame = std::make_unique<visage::Frame>();
+rootFrame->init();
+rootFrame->setPalette(&getDefaultPalette());
+
+// WRONG: Setting palette before init
+rootFrame->setPalette(&getDefaultPalette());
+rootFrame->init(); // May crash
+```
+
+### 5. Missing Methods
+- No `setRootFrame()` on ApplicationWindow
+- No `getLocalBounds()` - use `bounds()` or `width()/height()`
+- No `toFront()` - use `setOnTop(true)`
+
+## Animation and GPU Optimization
+
+### GPU-Accelerated Animations
+Create base class for animatable components:
+
+```cpp
+class AnimatableFrame : public visage::Frame {
+protected:
+    void drawContent(visage::Canvas& canvas) override {
+        // Custom drawing implementation
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        // Apply transforms
+        canvas.save();
+        canvas.translate(animationOffset_);
+        canvas.scale(animationScale_);
+        drawContent(canvas);
+        canvas.restore();
+    }
+};
+```
+
+### Performance Patterns
+- Use `redraw()` only when needed
+- Batch similar drawing operations
+- Cache complex calculations
+- Use transforms instead of repainting
+
+## Build System Integration
+
+### CMake Configuration
+```cmake
+option(USE_VISAGE_UI "Use Visage UI instead of JUCE" ON)
+
+if(USE_VISAGE_UI)
+    add_subdirectory(visage)
+    target_link_libraries(${PROJECT_NAME} PRIVATE visage)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE USE_VISAGE_UI=1)
+endif()
+```
+
+### Conditional Compilation
+```cpp
+#if USE_VISAGE_UI
+    #include "VisagePluginEditor.h"
+    using EditorType = VisagePluginEditor;
+#else
+    #include "JUCEPluginEditor.h" 
+    using EditorType = JUCEPluginEditor;
+#endif
+```
+
+## Development Workflow
+
+### Migration Decision Trees
+
+When to Use Pure Visage vs Hybrid Approach:
+
+**High Priority** (Migrate First):
+- Visualizers (waveforms, spectrums) - Huge GPU benefit
+- Animated elements - Smoother with Visage
+- Complex custom graphics - Easier in Visage
+
+**Medium Priority**:
+- Standard controls (knobs, sliders) - Good learning projects
+- Meters and displays - Performance gains
+
+**Low Priority** (Keep in JUCE):
+- File browsers - JUCE's is battle-tested
+- Menu bars - Platform-specific behavior
+- Tooltips - JUCE handles accessibility better
+
+### 1. Infrastructure First
+- Set up window embedding/bridge
+- Implement theme system
+- Create font management
+- Test basic rendering
+
+### 2. Component Migration Order
+1. Simple components (buttons, labels)
+2. Layout containers 
+3. Complex widgets (combo boxes, text editors)
+4. Custom drawing components
+5. Overlays and dialogs
+
+### 3. Testing Strategy
+- Build frequently during migration
+- Test in multiple DAWs
+- Verify all keyboard shortcuts work
+- Check memory management
+- Profile performance vs JUCE
+
+## Debugging Common Issues
+
+### Black/Empty Interface
+- Check renderer initialization with proper window handle
+- Verify canvas.pairToWindow() called with valid handles
+- Ensure swap chain support available
+- Add logging to track rendering pipeline
+
+### Debug Overlay for Development
+```cpp
+// VisageDebugLayer.h
+class VisageDebugLayer {
+public:
+    static void enableDebugMode() {
+        #if DEBUG
+        // Enable GPU timing
+        visage::Renderer::instance().enableGPUTiming(true);
+        
+        // Add debug overlay
+        auto debugOverlay = std::make_unique<DebugOverlay>();
+        getRootFrame()->addChild(debugOverlay.get());
+        #endif
+    }
+    
+    class DebugOverlay : public visage::Frame {
+        struct FrameStats {
+            float fps = 0.0f;
+            float gpuTime = 0.0f;
+            int drawCalls = 0;
+            size_t memoryUsage = 0;
+        };
+        
+        FrameStats stats_;
+        
+    public:
+        void draw(visage::Canvas& canvas) override {
+            // Update stats
+            updateStats();
+            
+            // Draw debug info
+            canvas.save();
+            canvas.setColor(0x80000000); // Semi-transparent black
+            canvas.fill(10, 10, 200, 100);
+            
+            auto* font = FontManager::instance().getFont(
+                FontManager::FontType::Regular, 12.0f);
+            canvas.setColor(0xff00ff00); // Green text
+            
+            drawDebugText(canvas, font, 15, 25, 
+                "FPS: " + std::to_string(static_cast<int>(stats_.fps)));
+            drawDebugText(canvas, font, 15, 40, 
+                "GPU: " + std::to_string(stats_.gpuTime) + "ms");
+            drawDebugText(canvas, font, 15, 55, 
+                "Draw Calls: " + std::to_string(stats_.drawCalls));
+            drawDebugText(canvas, font, 15, 70, 
+                "Memory: " + formatBytes(stats_.memoryUsage));
+            
+            canvas.restore();
+        }
+    };
+};
+```
+
+### Crashes on Startup
+- Check palette/theme initialization order
+- Verify Frame::init() called before setPalette()
+- Check for static initialization order issues
+- Validate window handle before passing to Visage
+
+### Events Not Working
+- Verify bridge translates coordinates correctly
+- Check modifier key mapping between frameworks
+- Ensure focus management works between JUCE/Visage
+- Test mouse capture and release
+
+### Memory Leaks in Plugin Unload
+**Solution**:
+```cpp
+~VisagePluginEditor() {
+    // Proper cleanup order is critical
+    stopTimer();
+    
+    // Remove all Visage children first
+    if (rootVisageFrame) {
+        rootVisageFrame->removeAllChildren();
+    }
+    
+    // Clear any cached resources
+    ResourceManager::instance().clearAll();
+    
+    // Finally destroy the Visage context
+    visageWindow.reset();
+}
+```
+
+## Platform-Specific Considerations
+
+### macOS
+- Use NSView* for parent handle
+- Handle Retina scaling properly
+- Metal rendering backend
+
+### Windows  
+- Use HWND for parent handle
+- Set WS_CHILD flag for plugin windows
+- DirectX 11/12 rendering backend
+
+### Linux
+- Use X11 window ID for parent handle
+- Handle DPI scaling
+- Vulkan rendering backend
+
+## Testing & Validation
+
+### Unit Testing Components
+```cpp
+class VisageKnobTests : public juce::UnitTest {
+public:
+    VisageKnobTests() : UnitTest("Visage Knob Tests") {}
+    
+    void runTest() override {
+        beginTest("Value clamping");
+        {
+            VisageKnob knob;
+            knob.setValue(1.5f);
+            expectEquals(knob.getValue(), 1.0f);
+            knob.setValue(-0.5f);
+            expectEquals(knob.getValue(), 0.0f);
+        }
+        
+        beginTest("Animation timing");
+        {
+            VisageKnob knob;
+            knob.setAnimationSpeed(1.0f); // Instant
+            knob.setValue(0.5f);
+            
+            // Simulate one timer callback
+            knob.timerCallback();
+            expectWithinAbsoluteError(knob.getValue(), 0.5f, 0.01f);
+        }
+    }
+};
+```
+
+### Performance Benchmarking
+```cpp
+// PerformanceBenchmark.h
+class VisagePerformanceBenchmark {
+public:
+    struct BenchmarkResult {
+        std::string testName;
+        double avgFrameTime;
+        double worstFrameTime;
+        int droppedFrames;
+    };
+    
+    static BenchmarkResult benchmarkComplexUI() {
+        BenchmarkResult result{"Complex UI Test", 0, 0, 0};
+        
+        // Create test scenario
+        auto testFrame = std::make_unique<visage::Frame>();
+        
+        // Add 100 animated components
+        for (int i = 0; i < 100; ++i) {
+            auto knob = std::make_unique<VisageKnob>();
+            knob->setBounds(
+                (i % 10) * 50, 
+                (i / 10) * 50, 
+                45, 45
+            );
+            testFrame->addChild(knob.get());
+        }
+        
+        // Run benchmark
+        const int frameCount = 600; // 10 seconds at 60fps
+        std::vector<double> frameTimes;
+        
+        for (int i = 0; i < frameCount; ++i) {
+            auto startTime = std::chrono::high_resolution_clock::now();
+            
+            // Animate all knobs
+            for (auto* child : testFrame->getChildren()) {
+                if (auto* knob = dynamic_cast<VisageKnob*>(child)) {
+                    knob->setValue(std::sin(i * 0.1f) * 0.5f + 0.5f);
+                }
+            }
+            
+            // Render frame
+            visage::Canvas canvas;
+            testFrame->draw(canvas);
+            canvas.submit();
+            
+            auto endTime = std::chrono::high_resolution_clock::now();
+            auto frameTime = std::chrono::duration<double, std::milli>(
+                endTime - startTime).count();
+            
+            frameTimes.push_back(frameTime);
+            
+            if (frameTime > 16.67) { // Missed 60fps target
+                result.droppedFrames++;
+            }
+        }
+        
+        // Calculate results
+        result.avgFrameTime = std::accumulate(
+            frameTimes.begin(), frameTimes.end(), 0.0) / frameTimes.size();
+        result.worstFrameTime = *std::max_element(
+            frameTimes.begin(), frameTimes.end());
+        
+        return result;
+    }
+};
+```
+
+### Integration Testing Checklist
+- [ ] Test in all major DAWs (Ableton, Logic, Reaper, etc.)
+- [ ] Verify window resizing behavior
+- [ ] Check preset loading/saving with UI state
+- [ ] Test automation recording/playback
+- [ ] Verify CPU/GPU usage under stress
+- [ ] Check for memory leaks during long sessions
+
+## Success Metrics
+
+When migration is complete, you should have:
+- ✅ Pixel-perfect visual parity with JUCE version
+- ✅ All functionality working (drag/drop, keyboard shortcuts, etc.)
+- ✅ Better performance due to GPU acceleration  
+- ✅ Cleaner code with modern C++ patterns
+- ✅ Hot-reloadable themes for easy customization
+- ✅ No memory leaks or crashes
+- ✅ Works in all target DAWs
+
 ## Detailed Implementation Guidelines for Key Visage Principles
 
 ### 1. Visage is Shader-First
@@ -412,297 +1512,12 @@ class GPUFriendlyComponent : public visage::Frame {
 };
 ```
 
-### 6. Comprehensive Font Handling in Visage: Font System Architecture
+## Key Takeaways for AI Assistants
 
-Visage's font system differs significantly from JUCE's approach. Here's what AI assistants need to understand:
-
-```cpp
-// JUCE: Fonts are system-dependent or loaded from files
-Font juceFont("Arial", 14.0f, Font::plain);
-
-// Visage: Fonts must be embedded as binary data
-#include "fonts/roboto_regular.h"
-auto font = std::make_unique<visage::Font>(14.0f, 
-    roboto_regular_data, 
-    roboto_regular_size);
-```
-
-### Font Embedding Process
-
-#### Step 1: Convert TTF/OTF to C++ Headers
-```python
-# font_converter.py
-import os
-import sys
-
-def convert_font_to_header(font_path, output_path):
-    """Convert font file to C++ header with binary data"""
-    font_name = os.path.splitext(os.path.basename(font_path))[0]
-    
-    with open(font_path, 'rb') as f:
-        font_data = f.read()
-    
-    with open(output_path, 'w') as f:
-        f.write(f"// Auto-generated from {font_path}\n")
-        f.write(f"#pragma once\n\n")
-        f.write(f"static const unsigned char {font_name}_data[] = {{\n")
-        
-        # Write bytes in hex format
-        for i, byte in enumerate(font_data):
-            if i % 16 == 0:
-                f.write("    ")
-            f.write(f"0x{byte:02x}, ")
-            if (i + 1) % 16 == 0:
-                f.write("\n")
-        
-        f.write("\n};\n\n")
-        f.write(f"static const size_t {font_name}_size = {len(font_data)};\n")
-```
-
-#### Step 2: Font Manager Implementation
-```cpp
-// FontManager.h
-class FontManager {
-public:
-    static FontManager& instance() {
-        static FontManager instance;
-        return instance;
-    }
-    
-    // Cache fonts by size to avoid recreation
-    visage::Font* getFont(FontType type, float size) {
-        FontKey key{type, size};
-        
-        auto it = fontCache_.find(key);
-        if (it != fontCache_.end()) {
-            return it->second.get();
-        }
-        
-        // Create new font
-        auto font = createFont(type, size);
-        auto* fontPtr = font.get();
-        fontCache_[key] = std::move(font);
-        return fontPtr;
-    }
-    
-    // Support for different font weights/styles
-    enum class FontType {
-        Regular,
-        Bold,
-        Italic,
-        Light,
-        Medium,
-        // Icon fonts
-        MaterialIcons,
-        FontAwesome
-    };
-    
-private:
-    struct FontKey {
-        FontType type;
-        float size;
-        
-        bool operator<(const FontKey& other) const {
-            return std::tie(type, size) < std::tie(other.type, other.size);
-        }
-    };
-    
-    std::map<FontKey, std::unique_ptr<visage::Font>> fontCache_;
-    
-    std::unique_ptr<visage::Font> createFont(FontType type, float size) {
-        switch (type) {
-            case FontType::Regular:
-                return std::make_unique<visage::Font>(size, 
-                    roboto_regular_data, roboto_regular_size);
-            case FontType::Bold:
-                return std::make_unique<visage::Font>(size, 
-                    roboto_bold_data, roboto_bold_size);
-            case FontType::MaterialIcons:
-                return std::make_unique<visage::Font>(size, 
-                    material_icons_data, material_icons_size);
-            // ... other font types
-        }
-    }
-};
-```
-
-### Text Rendering Patterns
-
-#### Basic Text Rendering
-```cpp
-void drawText(visage::Canvas& canvas, const std::string& text, 
-              float x, float y, float width, float height) {
-    // CRITICAL: Always convert std::string to visage::String
-    visage::String visageText(text.c_str());
-    
-    auto* font = FontManager::instance().getFont(
-        FontManager::FontType::Regular, 14.0f);
-    
-    canvas.text(visageText, *font, 
-        visage::Font::kCenter,  // Justification
-        x, y, width, height);   // Bounds
-}
-```
-
-#### Advanced Text Rendering with State
-```cpp
-class TextRenderer {
-public:
-    struct TextStyle {
-        FontManager::FontType fontType = FontManager::FontType::Regular;
-        float fontSize = 14.0f;
-        uint32_t color = 0xffffffff;
-        visage::Font::Justification justification = visage::Font::kLeft;
-        float lineHeight = 1.2f;
-        float letterSpacing = 0.0f;
-    };
-    
-    void drawStyledText(visage::Canvas& canvas, 
-                       const std::string& text,
-                       const TextStyle& style,
-                       float x, float y, float width, float height) {
-        auto* font = FontManager::instance().getFont(style.fontType, style.fontSize);
-        
-        canvas.save();
-        canvas.setColor(style.color);
-        
-        // Handle multi-line text manually if needed
-        if (text.find('\n') != std::string::npos) {
-            drawMultilineText(canvas, text, style, font, x, y, width, height);
-        } else {
-            visage::String visageText(text.c_str());
-            canvas.text(visageText, *font, style.justification, x, y, width, height);
-        }
-        
-        canvas.restore();
-    }
-    
-private:
-    void drawMultilineText(visage::Canvas& canvas,
-                          const std::string& text,
-                          const TextStyle& style,
-                          visage::Font* font,
-                          float x, float y, float width, float height) {
-        std::istringstream stream(text);
-        std::string line;
-        float lineY = y;
-        float lineHeight = style.fontSize * style.lineHeight;
-        
-        while (std::getline(stream, line)) {
-            visage::String visageLine(line.c_str());
-            canvas.text(visageLine, *font, style.justification, 
-                       x, lineY, width, lineHeight);
-            lineY += lineHeight;
-        }
-    }
-};
-```
-
-### Icon Font Support
-```cpp
-// MaterialIconsHelper.h
-namespace MaterialIcons {
-    // Define icon constants as UTF-8 strings
-    constexpr const char* SETTINGS = "\xEE\x8B\x8D";
-    constexpr const char* PLAY_ARROW = "\xEE\x80\xB7";
-    constexpr const char* PAUSE = "\xEE\x80\xB8";
-    constexpr const char* STOP = "\xEE\x80\xC7";
-    
-    void drawIcon(visage::Canvas& canvas, const char* icon, 
-                  float x, float y, float size, uint32_t color) {
-        auto* font = FontManager::instance().getFont(
-            FontManager::FontType::MaterialIcons, size);
-        
-        canvas.setColor(color);
-        visage::String iconString(icon);
-        canvas.text(iconString, *font, visage::Font::kCenter,
-                   x, y, size, size);
-    }
-}
-```
-
-### Font Metrics and Layout
-```cpp
-class TextLayoutHelper {
-public:
-    struct TextMetrics {
-        float width;
-        float height;
-        float ascent;
-        float descent;
-    };
-    
-    // Since Visage doesn't provide text metrics, approximate them
-    static TextMetrics measureText(const std::string& text, 
-                                  visage::Font* font,
-                                  float fontSize) {
-        // Approximations based on font size
-        // These ratios work for most fonts
-        TextMetrics metrics;
-        metrics.height = fontSize;
-        metrics.ascent = fontSize * 0.8f;
-        metrics.descent = fontSize * 0.2f;
-        
-        // Approximate width (monospace assumption)
-        // For proportional fonts, you'd need a character width table
-        float avgCharWidth = fontSize * 0.6f;
-        metrics.width = text.length() * avgCharWidth;
-        
-        return metrics;
-    }
-    
-    // Handle text truncation with ellipsis
-    static std::string truncateText(const std::string& text,
-                                   float maxWidth,
-                                   visage::Font* font,
-                                   float fontSize) {
-        auto metrics = measureText(text, font, fontSize);
-        if (metrics.width <= maxWidth) {
-            return text;
-        }
-        
-        const std::string ellipsis = "...";
-        auto ellipsisMetrics = measureText(ellipsis, font, fontSize);
-        float availableWidth = maxWidth - ellipsisMetrics.width;
-        
-        // Binary search for the right truncation point
-        size_t low = 0, high = text.length();
-        while (low < high) {
-            size_t mid = (low + high + 1) / 2;
-            auto truncated = text.substr(0, mid);
-            auto truncMetrics = measureText(truncated, font, fontSize);
-            
-            if (truncMetrics.width <= availableWidth) {
-                low = mid;
-            } else {
-                high = mid - 1;
-            }
-        }
-        
-        return text.substr(0, low) + ellipsis;
-    }
-};
-```
-
-### Font Loading Best Practices
-
-```cpp
-// FontLoader.h - Lazy loading pattern
-class FontLoader {
-public:
-    // Load fonts on-demand to reduce memory usage
-    static void preloadEssentialFonts() {
-        // Only preload the most commonly used font/size combinations
-        FontManager::instance().getFont(FontManager::FontType::Regular, 14.0f);
-        FontManager::instance().getFont(FontManager::FontType::Bold, 16.0f);
-    }
-    
-    // For development: hot-reload fonts
-    #if DEBUG
-    static void reloadFonts() {
-        // Clear font cache and reload from disk
-        // Useful during development for testing different fonts
-    }
-    #endif
-};
-```
+1. **Start with the bridge** - Plugin window embedding is the most critical part
+2. **Create missing components** - Visage is more minimal than JUCE
+3. **Respect initialization order** - Frame hierarchy and palette setup matters
+4. **Use incremental migration** - Port components one at a time
+5. **Leverage GPU acceleration** - Design for transforms and batching
+6. **Test frequently** - Build and test in DAWs throughout migration
+7. **Document API differences** - Maintain compatibility layers where needed
