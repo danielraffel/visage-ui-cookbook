@@ -1,31 +1,25 @@
-# Visage UI Cookbook
+<!-- readme.md -->
+# Visage UI Cookbook 🚀
 
-A collection of _lightly_ field-tested tips and guidance for working with [Visage](https://github.com/VitalAudio/visage) — a C++ UI toolkit optimized for real-time audio and plugin UIs — especially when used alongside [JUCE]( https://github.com/juce-framework/JUCE) AI tools like Claude Code.
+Moderately field‑tested tips for pairing [Visage](https://github.com/VitalAudio/visage) — a lightweight, GPU‑accelerated C++ UI framework — with audio‑centric
+toolkits such as [JUCE](https://github.com/juce-framework/JUCE) and AI coding assistants.
 
 ## Why Visage?
 
-Visage is a lightweight, retained-mode graphics framework built for high-performance rendering and flexibility in plugin UI design. It's particularly useful when:
+| You need… | Visage gives you… |
+|-----------|-------------------|
+| **Retained‑mode GPU speed** in plug‑ins | Cross‑platform renderer (bgfx) |
+| Deep control over **layout & animation** | `FlexFrame`, transforms, tweens |
+| A clean way to **embed** inside JUCE windows | Single bridge helper |
+| **Shader‑first effects** (blur, bloom, SDF) | First‑class `PostEffect` API |
 
-- You want to **separate rendering from interaction logic**
-- You need **OpenGL-backed performance** for scalable visuals
-- You’re building **custom, modern UIs** beyond JUCE’s traditional look
-- You want clean **layout control and animation support**
+## What’s in the cookbook?
 
-By integrating Visage with JUCE, you can take advantage of JUCE’s audio engine, plugin wrapper support, and platform abstractions — while using Visage for advanced UI rendering and layout.
+| File | Purpose |
+|------|---------|
+| **`visage_prompt.md`** | Corrected, slim guide for humans + LLMs migrating from JUCE&nbsp;→ Visage |
+| **`effects_catalog.md`** | Exhaustive catalogue of Visage GPU effects with perf notes & code samples |
 
-## What's Inside
+## Contributing
 
-This repo contains a curated markdown file for developers exploring or integrating Visage into their C++ projects. Each file addresses specific areas, like:
-
-- Fixing build warnings (e.g., integer truncation)
-- Integrating Visage inside JUCE components
-- Best practices for layout, animation, and draw loops
-- Debugging and profiling tips
-
-### Files
-
-- [visage_prompt.md](./visage_prompt.md): Guidance for an AI integrating the Visage codebase with JUCE.
-
-## License
-
-MIT — use freely and contribute if you’d like.
+MIT licensed — PRs that improve accuracy, add examples, or benchmark numbers are very welcome. Clone, test in your DAW, and open a request. Enjoy!
