@@ -772,6 +772,156 @@ rootFrame->init(); // May crash
 - No `getLocalBounds()` - use `bounds()` or `width()/height()`
 - No `toFront()` - use `setOnTop(true)`
 
+### 6. Effect-Related Pitfalls
+
+#### Effect Memory Management
+```cpp
+// WRONG: Creating effects every frame
+void draw(visage::Canvas& canvas) override {
+    canvas.pushEffect(std::make_unique<visage::BlurEffect>(5.0f)); // Memory allocation!
+    drawContent(canvas);
+    canvas.popEffect();
+}
+
+// CORRECT: Reuse effect instances
+class MyComponent : public visage::Frame {
+    std::unique_ptr<visage::BlurEffect> blur_effect_;
+    
+    MyComponent() {
+        blur_effect_ = std::make_unique<visage::BlurEffect>(5.0f);
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        canvas.pushEffect(blur_effect_.get());
+        drawContent(canvas);
+        canvas.popEffect();
+    }
+};
+```
+
+#### Effect Stacking Order
+```cpp
+// WRONG: Effects applied in wrong order
+canvas.pushEffect(blur_effect_.get());    // Blur first
+canvas.pushEffect(shadow_effect_.get());  // Then shadow - shadow gets blurred!
+
+// CORRECT: Logical effect order
+canvas.pushEffect(shadow_effect_.get());  // Shadow first
+canvas.pushEffect(blur_effect_.get());    // Then blur content only
+```
+
+#### Platform-Specific Effect Support
+```cpp
+// WRONG: Assuming all effects work on all platforms
+auto effect = std::make_unique<ComputeShaderEffect>();
+canvas.pushEffect(effect.get()); // May fail on older GPUs
+
+// CORRECT: Check platform capabilities
+if (visage::Renderer::instance().supportsComputeShaders()) {
+    canvas.pushEffect(compute_effect_.get());
+} else {
+    canvas.pushEffect(fallback_effect_.get());
+}
+```
+
+#### Effect Performance Assumptions
+```cpp
+// WRONG: Too many high-cost effects
+void draw(visage::Canvas& canvas) override {
+    canvas.pushEffect(blur_effect_.get());        // 2ms
+    canvas.pushEffect(bloom_effect_.get());       // 3ms
+    canvas.pushEffect(distortion_effect_.get());  // 2ms
+    canvas.pushEffect(color_grade_effect_.get()); // 1ms
+    // Total: 8ms just for effects!
+}
+
+// CORRECT: Profile and limit effects
+void draw(visage::Canvas& canvas) override {
+    if (high_quality_mode_) {
+        canvas.pushEffect(bloom_effect_.get());
+        canvas.pushEffect(color_grade_effect_.get());
+    } else {
+        canvas.pushEffect(color_grade_effect_.get()); // Just color grading
+    }
+    drawContent(canvas);
+    // Pop effects...
+}
+```
+
+#### Effect State Management
+```cpp
+// WRONG: Not saving/restoring canvas state
+void draw(visage::Canvas& canvas) override {
+    canvas.setBlendMode(visage::BlendMode::Add);
+    canvas.pushEffect(glow_effect_.get());
+    drawContent(canvas);
+    canvas.popEffect();
+    // Blend mode still set to Add!
+}
+
+// CORRECT: Save and restore state
+void draw(visage::Canvas& canvas) override {
+    canvas.save();
+    canvas.setBlendMode(visage::BlendMode::Add);
+    canvas.pushEffect(glow_effect_.get());
+    drawContent(canvas);
+    canvas.popEffect();
+    canvas.restore(); // Blend mode restored
+}
+```
+
+#### JUCE Graphics Context Mixing
+```cpp
+// WRONG: Trying to use JUCE Graphics with Visage effects
+void paint(juce::Graphics& g) override {
+    visage::Canvas canvas;
+    canvas.pushEffect(blur_effect_.get());
+    g.fillRect(bounds); // Won't get the effect!
+}
+
+// CORRECT: Use either JUCE or Visage, not both
+void draw(visage::Canvas& canvas) override {
+    canvas.pushEffect(blur_effect_.get());
+    canvas.fill(0, 0, width(), height()); // Proper Visage drawing
+    canvas.popEffect();
+}
+```
+
+#### Effect Animation Pitfalls
+```cpp
+// WRONG: Updating effect parameters without checking cost
+void timerCallback() override {
+    float radius = std::sin(time_) * 20.0f;
+    blur_effect_->setBlurRadius(radius); // Might rebuild internal buffers!
+}
+
+// CORRECT: Cache expensive effect configurations
+void timerCallback() override {
+    int radius_step = static_cast<int>(std::sin(time_) * 5.0f) * 4.0f;
+    if (radius_step != last_radius_step_) {
+        blur_effect_->setBlurRadius(radius_step);
+        last_radius_step_ = radius_step;
+    }
+}
+```
+
+#### HDR and Color Space Issues
+```cpp
+// WRONG: Not considering HDR when using bloom
+auto bloom = std::make_unique<visage::BloomEffect>();
+bloom->setIntensity(1.0f); // May blow out on HDR displays
+
+// CORRECT: Configure for display capabilities
+auto bloom = std::make_unique<visage::BloomEffect>();
+if (visage::Renderer::instance().isHDREnabled()) {
+    bloom->setHDR(true);
+    bloom->setIntensity(0.6f); // Lower for HDR
+    bloom->setToneMapping(true);
+} else {
+    bloom->setIntensity(1.0f);
+}
+```
+
 ## Animation and GPU Optimization
 
 ### GPU-Accelerated Animations
@@ -800,6 +950,473 @@ protected:
 - Batch similar drawing operations
 - Cache complex calculations
 - Use transforms instead of repainting
+
+## Visage Effects System
+
+### Understanding Visage's GPU-Accelerated Effects
+
+Visage provides a comprehensive effects system built on GPU shaders. Unlike JUCE where effects require custom Graphics code, Visage effects are first-class citizens designed for real-time performance.
+
+### Effect Categories & Performance Characteristics
+
+#### Core Effect Categories
+
+```cpp
+// Source/UI/Visage/Effects/EffectCategories.h
+
+namespace VisageEffects {
+    
+    // 1. BLUR EFFECTS
+    namespace Blur {
+        // Standard Gaussian Blur - visage::BlurPostEffect
+        // - Real-time variable radius blur
+        // - Optimized separable implementation
+        // - Typical range: 0.5 - 20.0 pixels
+        
+        class GaussianBlur : public visage::BlurPostEffect {
+            // Inherited: setBlurSize(), setBlurAmount()
+            // GPU Cost: Medium (two-pass separable)
+        };
+        
+        // Box Blur - Optimized for large radii
+        class BoxBlur : public visage::PostEffect {
+            // Constant time regardless of radius
+            // Less smooth than Gaussian but faster
+            // GPU Cost: Low
+        };
+        
+        // Directional Blur (Motion Blur)
+        class DirectionalBlur : public visage::PostEffect {
+            // Blur along specific angle
+            // Variable distance and angle
+            // GPU Cost: Medium
+        };
+    }
+    
+    // 2. BLOOM EFFECTS
+    namespace Bloom {
+        // Standard Bloom - visage::BloomPostEffect
+        // - Multi-pass implementation
+        // - Threshold-based glow
+        // - HDR support
+        
+        class StandardBloom : public visage::BloomPostEffect {
+            // Inherited: setBloomIntensity(), setBloomSize()
+            // setHdr(), setThreshold()
+            // GPU Cost: High (multiple passes)
+        };
+        
+        // Lens Flare Bloom
+        class LensFlareBloom : public visage::BloomPostEffect {
+            // Adds chromatic streaks
+            // Simulates camera lens artifacts
+            // GPU Cost: High
+        };
+    }
+    
+    // 3. DISTORTION EFFECTS
+    namespace Distortion {
+        // Wave/Ripple distortions
+        class WaveDistortion : public visage::PostEffect {
+            // Sine wave displacement
+            // Animated or static
+            // GPU Cost: Low
+        };
+        
+        // Lens distortions
+        class LensDistortion : public visage::PostEffect {
+            // Barrel/Pincushion distortion
+            // Chromatic aberration
+            // GPU Cost: Medium
+        };
+        
+        // Heat/Refraction distortion
+        class RefractionDistortion : public visage::PostEffect {
+            // Simulates heat haze or glass
+            // Uses normal maps
+            // GPU Cost: Medium
+        };
+    }
+    
+    // 4. COLOR MANIPULATION
+    namespace Color {
+        // HSL adjustments
+        class HSLAdjustment : public visage::PostEffect {
+            // Hue shift: -180 to +180 degrees
+            // Saturation: 0 to 2x
+            // Lightness: -1 to +1
+            // GPU Cost: Low
+        };
+        
+        // Color grading with LUTs
+        class ColorGrading : public visage::PostEffect {
+            // 3D LUT support
+            // Film emulation
+            // GPU Cost: Low
+        };
+        
+        // Channel effects
+        class ChannelEffects : public visage::PostEffect {
+            // Channel swap/isolation
+            // Chromatic aberration
+            // GPU Cost: Low
+        };
+    }
+    
+    // 5. STYLIZATION EFFECTS
+    namespace Stylize {
+        // Edge detection/outline
+        class EdgeDetection : public visage::PostEffect {
+            // Sobel/Canny edge detection
+            // Variable thickness
+            // GPU Cost: Medium
+        };
+        
+        // Posterization
+        class Posterize : public visage::PostEffect {
+            // Reduce color levels
+            // Comic book effect
+            // GPU Cost: Low
+        };
+        
+        // Pixelation
+        class Pixelate : public visage::PostEffect {
+            // Variable pixel size
+            // Maintains aspect ratio
+            // GPU Cost: Low
+        };
+    }
+}
+```
+
+### Effect Quick Reference
+
+| Effect | GPU Cost | Use Case | Key Parameters |
+|--------|----------|----------|----------------|
+| Gaussian Blur | Medium | UI softening, backgrounds | radius (0.5-20px) |
+| Bloom | High | Glow effects, highlights | intensity, threshold |
+| Wave Distortion | Low | Animation, water effects | amplitude, frequency |
+| Chromatic Aberration | Low | Retro/glitch look | R/B offset |
+| Film Grain | Low | Vintage/film look | amount, size |
+| Drop Shadow | Medium | Depth, elevation | offset, blur, color |
+| Scanlines | Low | CRT monitor effect | density, opacity |
+| Hue Shift | Low | Color variations | shift (-180 to 180) |
+| Inner Shadow | Medium | Inset depth | offset, blur, color |
+| Pixelate | Low | Retro/privacy effect | pixel size |
+
+### Basic Effect Usage
+
+```cpp
+// Simple effect application
+void draw(visage::Canvas& canvas) override {
+    // Single effect
+    canvas.pushEffect(std::make_unique<visage::BlurEffect>(5.0f));
+    drawContent(canvas);
+    canvas.popEffect();
+    
+    // Layered effects
+    canvas.pushEffect(bloomEffect_.get());
+    canvas.pushEffect(blurEffect_.get());
+    drawContent(canvas);
+    canvas.popEffect(); // blur
+    canvas.popEffect(); // bloom
+}
+```
+
+### Migrating JUCE Effects to Visage
+
+#### Shadow Effects
+```cpp
+// JUCE
+void paint(Graphics& g) override {
+    // Manual shadow with multiple draws
+    g.setColour(Colours::black.withAlpha(0.3f));
+    g.fillRect(bounds.translated(2, 2));
+    g.setColour(componentColor);
+    g.fillRect(bounds);
+}
+
+// Visage
+void draw(visage::Canvas& canvas) override {
+    auto shadow = std::make_unique<DropShadowEffect>();
+    shadow->setOffset(2.0f, 2.0f);
+    shadow->setBlurRadius(4.0f);
+    shadow->setShadowColor(0x4D000000);
+    
+    canvas.pushEffect(shadow.get());
+    canvas.setColor(componentColor);
+    canvas.fill(0, 0, width(), height());
+    canvas.popEffect();
+}
+```
+
+#### Blur Effects
+```cpp
+// JUCE (requires custom implementation)
+class JUCEBlurEffect {
+    void applyBlur(Image& img, int radius) {
+        // Complex CPU-based convolution
+        for (int y = 0; y < img.getHeight(); ++y) {
+            for (int x = 0; x < img.getWidth(); ++x) {
+                // Expensive per-pixel operations
+            }
+        }
+    }
+};
+
+// Visage (built-in GPU acceleration)
+canvas.pushEffect(std::make_unique<visage::BlurEffect>(10.0f));
+drawContent(canvas);
+canvas.popEffect();
+```
+
+#### Glow/Bloom Effects
+```cpp
+// JUCE (manual implementation)
+void createGlow(Graphics& g, Rectangle<int> bounds) {
+    Image glow(Image::ARGB, bounds.getWidth() * 2, bounds.getHeight() * 2, true);
+    Graphics glowG(glow);
+    // Draw enlarged blurred version
+    // Composite back with transparency
+    // Very expensive operation
+}
+
+// Visage (optimized GPU bloom)
+auto bloom = std::make_unique<visage::BloomEffect>();
+bloom->setIntensity(0.6f);
+bloom->setThreshold(0.8f);
+canvas.pushEffect(bloom.get());
+drawContent(canvas);
+canvas.popEffect();
+```
+
+### Effect Performance Guidelines
+
+```cpp
+class EffectPerformanceGuide {
+public:
+    enum class GPUCost {
+        Low,      // < 0.5ms per frame
+        Medium,   // 0.5-2ms per frame  
+        High      // > 2ms per frame
+    };
+    
+    struct EffectProfile {
+        std::string name;
+        GPUCost cost;
+        bool requires_multiple_passes;
+        bool supports_batching;
+        size_t texture_memory_bytes;
+    };
+    
+    // Effect stacking recommendations
+    static int getMaxRecommendedEffects(float target_fps) {
+        if (target_fps >= 120) return 1;  // High refresh rate
+        if (target_fps >= 60) return 3;   // Standard 60fps
+        if (target_fps >= 30) return 5;   // Lower performance
+        return 2; // Mobile/low-end
+    }
+    
+    // Check if effect combination is viable
+    static bool isViableCombination(const std::vector<EffectProfile>& effects) {
+        float total_ms = 0.0f;
+        for (const auto& effect : effects) {
+            switch (effect.cost) {
+                case GPUCost::Low: total_ms += 0.3f; break;
+                case GPUCost::Medium: total_ms += 1.0f; break;
+                case GPUCost::High: total_ms += 2.5f; break;
+            }
+        }
+        return total_ms < 16.0f; // Under 16ms for 60fps
+    }
+};
+```
+
+### Effect Combination Patterns
+
+```cpp
+// Recommended effect combinations
+namespace EffectPresets {
+    std::vector<std::unique_ptr<visage::PostEffect>> createCinematicPreset() {
+        std::vector<std::unique_ptr<visage::PostEffect>> effects;
+        
+        // Subtle chromatic aberration
+        auto chroma = std::make_unique<ChromaticAberrationEffect>();
+        chroma->setRedOffset(0.001f, 0.0f);
+        chroma->setBlueOffset(-0.001f, 0.0f);
+        effects.push_back(std::move(chroma));
+        
+        // Soft bloom
+        auto bloom = std::make_unique<visage::BloomEffect>();
+        bloom->setIntensity(0.3f);
+        bloom->setThreshold(0.85f);
+        effects.push_back(std::move(bloom));
+        
+        // Film grain
+        auto grain = std::make_unique<FilmGrainEffect>();
+        grain->setAmount(0.02f);
+        effects.push_back(std::move(grain));
+        
+        return effects;
+    }
+    
+    std::vector<std::unique_ptr<visage::PostEffect>> createRetroPreset() {
+        std::vector<std::unique_ptr<visage::PostEffect>> effects;
+        
+        // CRT curvature
+        auto barrel = std::make_unique<BarrelDistortionEffect>();
+        barrel->setStrength(0.02f);
+        effects.push_back(std::move(barrel));
+        
+        // Scanlines
+        auto scanlines = std::make_unique<ScanlinesEffect>();
+        scanlines->setDensity(600.0f);
+        scanlines->setOpacity(0.15f);
+        effects.push_back(std::move(scanlines));
+        
+        // Chromatic aberration
+        auto chroma = std::make_unique<ChromaticAberrationEffect>();
+        chroma->setRedOffset(0.003f, 0.0f);
+        chroma->setBlueOffset(-0.003f, 0.0f);
+        effects.push_back(std::move(chroma));
+        
+        // Bloom for CRT glow
+        auto bloom = std::make_unique<visage::BloomEffect>();
+        bloom->setIntensity(0.4f);
+        effects.push_back(std::move(bloom));
+        
+        return effects;
+    }
+}
+```
+
+### Effect Feature Flags
+
+```cmake
+# In CMakeLists.txt
+option(ENABLE_BASIC_EFFECTS "Basic blur/bloom effects" ON)
+option(ENABLE_DISTORTION_EFFECTS "Wave/ripple/fisheye effects" OFF)
+option(ENABLE_STYLIZATION_EFFECTS "Artistic effects" OFF)
+option(ENABLE_ADVANCED_SHADERS "Custom shader effects" OFF)
+```
+
+```cpp
+// Conditional effect compilation
+std::unique_ptr<visage::PostEffect> createEffect(const std::string& type) {
+    if (type == "blur") {
+#ifdef ENABLE_BASIC_EFFECTS
+        return std::make_unique<visage::BlurEffect>();
+#else
+        return nullptr;
+#endif
+    }
+    
+    if (type == "wave") {
+#ifdef ENABLE_DISTORTION_EFFECTS
+        return std::make_unique<WaveDistortionEffect>();
+#else
+        DBG("Distortion effects not enabled in build");
+        return nullptr;
+#endif
+    }
+    
+    if (type == "pixelate") {
+#ifdef ENABLE_STYLIZATION_EFFECTS
+        return std::make_unique<PixelateEffect>();
+#else
+        return nullptr;
+#endif
+    }
+    
+    return nullptr;
+}
+```
+
+### Platform-Specific Effect Optimizations
+
+```cpp
+namespace PlatformEffects {
+#ifdef _WIN32
+    // DirectX 11/12 optimizations
+    void optimizeForDirectX(visage::PostEffect* effect) {
+        // Use compute shaders for blur effects
+        if (auto* blur = dynamic_cast<visage::BlurEffect*>(effect)) {
+            blur->setUseComputeShader(true);
+        }
+    }
+#endif
+    
+#ifdef __APPLE__
+    // Metal optimizations
+    void optimizeForMetal(visage::PostEffect* effect) {
+        // Use Metal Performance Shaders where available
+        if (@available(macOS 10.13, *)) {
+            effect->setUseNativeOptimization(true);
+        }
+    }
+#endif
+    
+#ifdef __linux__
+    // Vulkan optimizations
+    void optimizeForVulkan(visage::PostEffect* effect) {
+        // Enable Vulkan-specific features
+        effect->setMultiGPU(true);
+    }
+#endif
+}
+```
+
+### Effect Profiling and Debugging
+
+```cpp
+class EffectProfiler {
+public:
+    struct EffectMetrics {
+        std::string effect_name;
+        float gpu_time_ms = 0.0f;
+        float cpu_time_ms = 0.0f;
+        size_t texture_memory_mb = 0;
+        int draw_calls = 0;
+    };
+    
+    static EffectMetrics profileEffect(visage::PostEffect* effect, 
+                                      visage::Frame* testContent) {
+        EffectMetrics metrics;
+        metrics.effect_name = typeid(*effect).name();
+        
+        // GPU timing
+        auto gpu_start = visage::Renderer::instance().getGPUTime();
+        
+        visage::Canvas canvas;
+        canvas.pushEffect(effect);
+        testContent->draw(canvas);
+        canvas.popEffect();
+        int submit_pass = canvas.submit();
+        
+        // Wait for GPU completion
+        visage::Renderer::instance().frame();
+        
+        auto gpu_end = visage::Renderer::instance().getGPUTime();
+        metrics.gpu_time_ms = gpu_end - gpu_start;
+        
+        // Memory usage
+        metrics.texture_memory_mb = effect->getTextureMemoryUsage() / (1024 * 1024);
+        
+        return metrics;
+    }
+    
+    static void generateEffectReport(const std::vector<EffectMetrics>& metrics) {
+        DBG("=== Effect Performance Report ===");
+        for (const auto& m : metrics) {
+            DBG(m.effect_name << ":");
+            DBG("  GPU Time: " << m.gpu_time_ms << "ms");
+            DBG("  Memory: " << m.texture_memory_mb << "MB");
+            DBG("  Draw Calls: " << m.draw_calls);
+        }
+    }
+};
+```
+
 
 ## Build System Integration
 
@@ -864,6 +1481,161 @@ When to Use Pure Visage vs Hybrid Approach:
 - Verify all keyboard shortcuts work
 - Check memory management
 - Profile performance vs JUCE
+
+## Feature Flag Migration Strategy
+
+### Phase 1: Foundation
+**Goal**: Establish infrastructure without user-facing changes
+
+```cmake
+# Phase 1 Feature Flags
+set(USE_VISAGE_UI ON)
+set(ENABLE_VISAGE_MIGRATION ON)
+set(MIGRATE_KNOBS_TO_VISAGE OFF)  # All component migrations OFF
+set(ENABLE_AB_TESTING ON)
+set(VISAGE_DEBUG_RENDERING ON)
+```
+
+**Tasks**:
+- Set up build system with feature flags
+- Implement JuceVisageBridge
+- Create wrapper templates
+- Establish performance monitoring
+- No visual changes to users
+
+### Phase 2: Low-Risk Components
+**Goal**: Migrate simple, non-critical components
+
+```cmake
+# Phase 2 Feature Flags
+set(MIGRATE_BUTTONS_TO_VISAGE ON)  # Start with buttons
+set(AB_TEST_BUTTON_RATIO 0.1)      # 10% of users
+```
+
+**Rollout Strategy**:
+```cpp
+// Gradual rollout configuration
+class MigrationSchedule {
+    static constexpr float getButtonRolloutPercentage(int days_since_launch) {
+        if (days_since_launch < 3) return 0.1f;      // 10% for 3 days
+        if (days_since_launch < 7) return 0.25f;     // 25% for next 4 days
+        if (days_since_launch < 14) return 0.5f;     // 50% for week 2
+        return 1.0f;                                  // 100% after 2 weeks
+    }
+};
+```
+
+### Phase 3: Performance-Critical Components
+**Goal**: Migrate components that benefit most from GPU acceleration
+
+```cmake
+# Phase 3 Feature Flags
+set(MIGRATE_KNOBS_TO_VISAGE ON)
+set(MIGRATE_SLIDERS_TO_VISAGE ON)
+set(MIGRATE_DISPLAYS_TO_VISAGE ON)  # Waveforms, meters, etc.
+```
+
+### Phase 4: Visual Effects
+**Goal**: Enable GPU effects for enhanced visuals
+
+```cmake
+# Phase 4 Feature Flags
+set(MIGRATE_EFFECTS_TO_VISAGE ON)
+set(ENABLE_ADVANCED_EFFECTS ON)
+```
+
+### Phase 5: Complete Migration
+**Goal**: Remove JUCE UI dependencies
+
+```cmake
+# Phase 5 - Final configuration
+set(VISAGE_MIGRATION_LEVEL "COMPLETE")
+set(ENABLE_JUCE_FALLBACK OFF)  # Remove JUCE UI code
+```
+
+### Rollback Procedures
+
+```cpp
+// Emergency rollback system
+class MigrationRollback {
+public:
+    enum class RollbackLevel {
+        None,
+        CurrentPhase,    // Roll back current phase only
+        LastStable,      // Roll back to last stable phase
+        Complete         // Roll back entire migration
+    };
+    
+    static void executeRollback(RollbackLevel level) {
+        switch (level) {
+            case RollbackLevel::CurrentPhase:
+                // Disable current phase flags via environment
+                setenv("MIGRATE_CURRENT_PHASE", "OFF", 1);
+                break;
+                
+            case RollbackLevel::LastStable:
+                // Revert to previous phase configuration
+                loadConfiguration("last_stable_phase.cmake");
+                break;
+                
+            case RollbackLevel::Complete:
+                // Disable all Visage features
+                setenv("USE_VISAGE_UI", "OFF", 1);
+                setenv("FORCE_JUCE_UI", "ON", 1);
+                break;
+        }
+    }
+};
+```
+
+### Monitoring & Success Metrics
+
+```cpp
+class MigrationMetrics {
+    struct PhaseMetrics {
+        // Performance metrics
+        float avg_frame_time_ms;
+        float p99_frame_time_ms;
+        int gpu_memory_mb;
+        float cpu_usage_percent;
+        
+        // Stability metrics
+        int crash_count;
+        int error_count;
+        float uptime_hours;
+        
+        // User engagement metrics
+        int user_interactions;
+        float session_duration;
+        int feature_usage_count;
+        
+        // Quality metrics
+        int visual_glitch_reports;
+        int performance_complaints;
+        float user_satisfaction_score;
+    };
+    
+    static bool shouldProceedToNextPhase(const PhaseMetrics& current, 
+                                        const PhaseMetrics& baseline) {
+        // Performance must not degrade more than 5%
+        if (current.avg_frame_time_ms > baseline.avg_frame_time_ms * 1.05f) {
+            return false;
+        }
+        
+        // Crash rate must not increase
+        if (current.crash_count > baseline.crash_count) {
+            return false;
+        }
+        
+        // User engagement must remain stable
+        if (current.user_interactions < baseline.user_interactions * 0.95f) {
+            return false;
+        }
+        
+        return true;
+    }
+};
+```
 
 ## Debugging Common Issues
 
@@ -980,101 +1752,406 @@ public:
 ## Testing & Validation
 
 ### Unit Testing Components
+[existing unit test content]
+
+### Effect-Specific Testing
+
+#### Effect Performance Tests
 ```cpp
-class VisageKnobTests : public juce::UnitTest {
+class EffectPerformanceTests : public juce::UnitTest {
 public:
-    VisageKnobTests() : UnitTest("Visage Knob Tests") {}
+    EffectPerformanceTests() : UnitTest("Visage Effect Performance") {}
     
     void runTest() override {
-        beginTest("Value clamping");
+        beginTest("Single Effect Performance");
         {
-            VisageKnob knob;
-            knob.setValue(1.5f);
-            expectEquals(knob.getValue(), 1.0f);
-            knob.setValue(-0.5f);
-            expectEquals(knob.getValue(), 0.0f);
+            auto testFrame = createTestFrame();
+            
+            // Test each effect type
+            testEffectPerformance<visage::BlurEffect>("Blur", 5.0f);
+            testEffectPerformance<visage::BloomEffect>("Bloom");
+            testEffectPerformance<ChromaticAberrationEffect>("Chromatic");
+            
+            // Ensure no effect takes more than 2ms
+            for (const auto& [name, time] : effect_times_) {
+                expect(time < 2.0f, name + " took " + String(time) + "ms");
+            }
         }
         
-        beginTest("Animation timing");
+        beginTest("Effect Stacking Performance");
         {
-            VisageKnob knob;
-            knob.setAnimationSpeed(1.0f); // Instant
-            knob.setValue(0.5f);
+            auto canvas = createTestCanvas();
+            auto testFrame = createTestFrame();
             
-            // Simulate one timer callback
-            knob.timerCallback();
-            expectWithinAbsoluteError(knob.getValue(), 0.5f, 0.01f);
+            // Test multiple effects
+            auto blur = std::make_unique<visage::BlurEffect>(5.0f);
+            auto bloom = std::make_unique<visage::BloomEffect>();
+            auto grain = std::make_unique<FilmGrainEffect>();
+            
+            auto start = std::chrono::high_resolution_clock::now();
+            
+            canvas.pushEffect(blur.get());
+            canvas.pushEffect(bloom.get());
+            canvas.pushEffect(grain.get());
+            testFrame->draw(canvas);
+            canvas.popEffect();
+            canvas.popEffect();
+            canvas.popEffect();
+            canvas.submit();
+            
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration<float, std::milli>(end - start).count();
+            
+            // Three effects should complete in under 5ms
+            expect(duration < 5.0f, "Stacked effects took " + String(duration) + "ms");
         }
+        
+        beginTest("Effect Memory Usage");
+        {
+            size_t initial_memory = getGPUMemoryUsage();
+            
+            // Create many effects
+            std::vector<std::unique_ptr<visage::PostEffect>> effects;
+            for (int i = 0; i < 100; ++i) {
+                effects.push_back(std::make_unique<visage::BlurEffect>(10.0f));
+            }
+            
+            size_t peak_memory = getGPUMemoryUsage();
+            size_t memory_per_effect = (peak_memory - initial_memory) / 100;
+            
+            // Each blur effect should use less than 1MB
+            expect(memory_per_effect < 1024 * 1024, 
+                   "Blur effect uses " + String(memory_per_effect / 1024) + "KB");
+        }
+    }
+    
+private:
+    std::map<std::string, float> effect_times_;
+    
+    template<typename EffectType, typename... Args>
+    void testEffectPerformance(const std::string& name, Args&&... args) {
+        auto effect = std::make_unique<EffectType>(std::forward<Args>(args)...);
+        auto testFrame = createTestFrame();
+        visage::Canvas canvas;
+        
+        // Warm up
+        for (int i = 0; i < 5; ++i) {
+            canvas.pushEffect(effect.get());
+            testFrame->draw(canvas);
+            canvas.popEffect();
+            canvas.submit();
+        }
+        
+        // Measure
+        auto start = std::chrono::high_resolution_clock::now();
+        
+        canvas.pushEffect(effect.get());
+        testFrame->draw(canvas);
+        canvas.popEffect();
+        canvas.submit();
+        visage::Renderer::instance().frame(); // Wait for GPU
+        
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration<float, std::milli>(end - start).count();
+        
+        effect_times_[name] = duration;
+    }
+    
+    std::unique_ptr<visage::Frame> createTestFrame() {
+        auto frame = std::make_unique<TestContentFrame>();
+        frame->setBounds(0, 0, 800, 600);
+        return frame;
     }
 };
 ```
 
-### Performance Benchmarking
+#### Effect Visual Regression Tests
 ```cpp
-// PerformanceBenchmark.h
-class VisagePerformanceBenchmark {
+class EffectVisualTests : public juce::UnitTest {
 public:
-    struct BenchmarkResult {
-        std::string testName;
-        double avgFrameTime;
-        double worstFrameTime;
-        int droppedFrames;
-    };
+    EffectVisualTests() : UnitTest("Visage Effect Visual Tests") {}
     
-    static BenchmarkResult benchmarkComplexUI() {
-        BenchmarkResult result{"Complex UI Test", 0, 0, 0};
-        
-        // Create test scenario
-        auto testFrame = std::make_unique<visage::Frame>();
-        
-        // Add 100 animated components
-        for (int i = 0; i < 100; ++i) {
-            auto knob = std::make_unique<VisageKnob>();
-            knob->setBounds(
-                (i % 10) * 50, 
-                (i / 10) * 50, 
-                45, 45
-            );
-            testFrame->addChild(knob.get());
+    void runTest() override {
+        beginTest("Effect Output Consistency");
+        {
+            // Render same content with same effect parameters
+            auto hash1 = renderAndHash<visage::BlurEffect>(5.0f);
+            auto hash2 = renderAndHash<visage::BlurEffect>(5.0f);
+            
+            expectEquals(hash1, hash2, "Blur effect not deterministic");
         }
         
-        // Run benchmark
-        const int frameCount = 600; // 10 seconds at 60fps
-        std::vector<double> frameTimes;
-        
-        for (int i = 0; i < frameCount; ++i) {
-            auto startTime = std::chrono::high_resolution_clock::now();
+        beginTest("Effect Parameter Validation");
+        {
+            auto blur = std::make_unique<visage::BlurEffect>();
             
-            // Animate all knobs
-            for (auto* child : testFrame->getChildren()) {
-                if (auto* knob = dynamic_cast<VisageKnob*>(child)) {
-                    knob->setValue(std::sin(i * 0.1f) * 0.5f + 0.5f);
+            // Test parameter clamping
+            blur->setBlurSize(-5.0f);
+            expect(blur->getBlurSize() >= 0.0f, "Negative blur size not clamped");
+            
+            blur->setBlurSize(1000.0f);
+            expect(blur->getBlurSize() <= 100.0f, "Excessive blur size not clamped");
+        }
+        
+        beginTest("Effect Combination Rendering");
+        {
+            // Test that problematic combinations don't crash
+            auto testFrame = createTestFrame();
+            visage::Canvas canvas;
+            
+            // Extreme parameters
+            auto blur = std::make_unique<visage::BlurEffect>(50.0f);
+            auto bloom = std::make_unique<visage::BloomEffect>();
+            bloom->setIntensity(10.0f);
+            
+            // Should not crash or hang
+            bool completed = false;
+            std::thread render_thread([&]() {
+                canvas.pushEffect(blur.get());
+                canvas.pushEffect(bloom.get());
+                testFrame->draw(canvas);
+                canvas.popEffect();
+                canvas.popEffect();
+                canvas.submit();
+                completed = true;
+            });
+            
+            render_thread.join();
+            expect(completed, "Effect combination caused hang");
+        }
+    }
+    
+private:
+    template<typename EffectType, typename... Args>
+    uint64_t renderAndHash(Args&&... args) {
+        auto effect = std::make_unique<EffectType>(std::forward<Args>(args)...);
+        auto testFrame = createTestFrame();
+        
+        // Render to texture
+        visage::RenderTarget target(256, 256);
+        visage::Canvas canvas;
+        canvas.setRenderTarget(&target);
+        
+        canvas.pushEffect(effect.get());
+        testFrame->draw(canvas);
+        canvas.popEffect();
+        canvas.submit();
+        
+        // Get pixel data and compute hash
+        auto pixels = target.readPixels();
+        return computeHash(pixels);
+    }
+    
+    uint64_t computeHash(const std::vector<uint8_t>& pixels) {
+        // Simple hash for regression testing
+        uint64_t hash = 0;
+        for (size_t i = 0; i < pixels.size(); i += 4) {
+            hash ^= (uint64_t(pixels[i]) << ((i % 8) * 8));
+        }
+        return hash;
+    }
+};
+```
+
+#### Effect Platform Compatibility Tests
+```cpp
+class EffectCompatibilityTests : public juce::UnitTest {
+public:
+    EffectCompatibilityTests() : UnitTest("Effect Platform Compatibility") {}
+    
+    void runTest() override {
+        beginTest("Platform Feature Detection");
+        {
+            auto& renderer = visage::Renderer::instance();
+            
+            // Log platform capabilities
+            DBG("Platform: " << getPlatformName());
+            DBG("GPU: " << renderer.getGPUName());
+            DBG("Max Texture Size: " << renderer.getMaxTextureSize());
+            DBG("Compute Shaders: " << renderer.supportsComputeShaders());
+            DBG("HDR: " << renderer.isHDREnabled());
+            
+            // Ensure minimum capabilities
+            expect(renderer.getMaxTextureSize() >= 2048, 
+                   "GPU max texture size below minimum");
+        }
+        
+        beginTest("Effect Fallback Testing");
+        {
+            // Test that effects have appropriate fallbacks
+            std::vector<std::unique_ptr<visage::PostEffect>> effects;
+            
+            effects.push_back(createEffectWithFallback("AdvancedBloom"));
+            effects.push_back(createEffectWithFallback("ComputeBlur"));
+            effects.push_back(createEffectWithFallback("TessellationWarp"));
+            
+            for (const auto& effect : effects) {
+                expect(effect != nullptr, "Effect creation failed without fallback");
+                
+                // Test that effect renders without crashing
+                testEffectRender(effect.get());
+            }
+        }
+        
+        beginTest("Multi-GPU Consistency");
+        {
+#ifdef ENABLE_MULTI_GPU_TESTING
+            auto& renderer = visage::Renderer::instance();
+            int gpu_count = renderer.getGPUCount();
+            
+            if (gpu_count > 1) {
+                // Test rendering on each GPU
+                for (int i = 0; i < gpu_count; ++i) {
+                    renderer.setActiveGPU(i);
+                    
+                    auto hash = renderTestPattern();
+                    DBG("GPU " << i << " render hash: " << hash);
+                    
+                    // Hashes should be similar (allowing for minor precision differences)
+                    if (i > 0) {
+                        expect(hashesAreSimilar(previous_hash_, hash),
+                               "GPU rendering inconsistency");
+                    }
+                    previous_hash_ = hash;
                 }
             }
-            
-            // Render frame
-            visage::Canvas canvas;
+#endif
+        }
+    }
+    
+private:
+    uint64_t previous_hash_ = 0;
+    
+    std::unique_ptr<visage::PostEffect> createEffectWithFallback(const std::string& type) {
+        try {
+            return EffectFactory::create(type);
+        } catch (const std::exception& e) {
+            DBG("Effect " << type << " not available: " << e.what());
+            DBG("Using fallback");
+            return EffectFactory::createFallback(type);
+        }
+    }
+    
+    void testEffectRender(visage::PostEffect* effect) {
+        auto testFrame = createTestFrame();
+        visage::Canvas canvas;
+        
+        bool success = false;
+        try {
+            canvas.pushEffect(effect);
             testFrame->draw(canvas);
+            canvas.popEffect();
             canvas.submit();
-            
-            auto endTime = std::chrono::high_resolution_clock::now();
-            auto frameTime = std::chrono::duration<double, std::milli>(
-                endTime - startTime).count();
-            
-            frameTimes.push_back(frameTime);
-            
-            if (frameTime > 16.67) { // Missed 60fps target
-                result.droppedFrames++;
-            }
+            success = true;
+        } catch (const std::exception& e) {
+            DBG("Effect render failed: " << e.what());
         }
         
-        // Calculate results
-        result.avgFrameTime = std::accumulate(
-            frameTimes.begin(), frameTimes.end(), 0.0) / frameTimes.size();
-        result.worstFrameTime = *std::max_element(
-            frameTimes.begin(), frameTimes.end());
+        expect(success, "Effect rendering failed");
+    }
+    
+    bool hashesAreSimilar(uint64_t a, uint64_t b) {
+        // Allow up to 5% difference for GPU precision variations
+        uint64_t diff = (a > b) ? (a - b) : (b - a);
+        return diff < (a / 20);
+    }
+};
+```
+
+#### Effect Stress Tests
+```cpp
+class EffectStressTests : public juce::UnitTest {
+public:
+    EffectStressTests() : UnitTest("Effect Stress Testing") {}
+    
+    void runTest() override {
+        beginTest("Rapid Effect Switching");
+        {
+            auto testFrame = createTestFrame();
+            visage::Canvas canvas;
+            
+            // Create effect pool
+            std::vector<std::unique_ptr<visage::PostEffect>> effects;
+            effects.push_back(std::make_unique<visage::BlurEffect>(5.0f));
+            effects.push_back(std::make_unique<visage::BloomEffect>());
+            effects.push_back(std::make_unique<ChromaticAberrationEffect>());
+            
+            // Rapidly switch effects
+            auto start = std::chrono::steady_clock::now();
+            int frame_count = 0;
+            
+            while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
+                auto& effect = effects[frame_count % effects.size()];
+                
+                canvas.pushEffect(effect.get());
+                testFrame->draw(canvas);
+                canvas.popEffect();
+                canvas.submit();
+                
+                frame_count++;
+            }
+            
+            float fps = frame_count / 5.0f;
+            expect(fps > 30.0f, "Effect switching performance below 30fps: " + String(fps));
+        }
         
-        return result;
+        beginTest("Maximum Effect Stack");
+        {
+            auto testFrame = createTestFrame();
+            visage::Canvas canvas;
+            
+            // Stack many effects
+            std::vector<std::unique_ptr<visage::PostEffect>> effect_stack;
+            int max_effects = 0;
+            
+            try {
+                for (int i = 0; i < 50; ++i) {
+                    auto effect = std::make_unique<visage::BlurEffect>(1.0f);
+                    canvas.pushEffect(effect.get());
+                    effect_stack.push_back(std::move(effect));
+                    max_effects = i + 1;
+                }
+                
+                testFrame->draw(canvas);
+                
+                // Pop all effects
+                for (int i = 0; i < max_effects; ++i) {
+                    canvas.popEffect();
+                }
+                
+                canvas.submit();
+            } catch (const std::exception& e) {
+                DBG("Effect stack limit reached at " << max_effects << ": " << e.what());
+            }
+            
+            expect(max_effects >= 8, "Effect stack limit too low: " + String(max_effects));
+        }
+        
+        beginTest("Effect Memory Pressure");
+        {
+            size_t initial_memory = getGPUMemoryUsage();
+            std::vector<std::unique_ptr<visage::PostEffect>> effects;
+            
+            // Create effects until memory pressure
+            try {
+                for (int i = 0; i < 1000; ++i) {
+                    // High memory effect - large blur
+                    auto blur = std::make_unique<visage::BlurEffect>(50.0f);
+                    effects.push_back(std::move(blur));
+                    
+                    if (i % 100 == 0) {
+                        size_t current_memory = getGPUMemoryUsage();
+                        DBG("Created " << i << " effects, memory: " << 
+                            (current_memory - initial_memory) / (1024 * 1024) << "MB");
+                    }
+                }
+            } catch (const std::exception& e) {
+                DBG("Memory limit reached: " << e.what());
+            }
+            
+            // Should handle memory pressure gracefully
+            expect(effects.size() > 50, "Too few effects before memory limit");
+        }
     }
 };
 ```
@@ -1086,6 +2163,36 @@ public:
 - [ ] Test automation recording/playback
 - [ ] Verify CPU/GPU usage under stress
 - [ ] Check for memory leaks during long sessions
+- [ ] **Test effect combinations in real-world scenarios**
+- [ ] **Verify effect parameter automation**
+- [ ] **Check effect performance on minimum spec hardware**
+- [ ] **Test effect behavior during audio dropouts**
+- [ ] **Verify effect state persistence across sessions**
+
+### Effect-Specific DAW Testing
+```cpp
+class EffectDAWIntegrationTests {
+    void testEffectsInDAW(const std::string& daw_name) {
+        // Test that effects work correctly in each DAW
+        
+        // 1. Load plugin with effects enabled
+        // 2. Automate effect parameters
+        // 3. Save and reload project
+        // 4. Verify effects still work
+        // 5. Test during high CPU load
+        // 6. Check GPU acceleration is active
+        // 7. Verify no conflicts with DAW's graphics
+    }
+    
+    void testSpecificScenarios() {
+        // Ableton Live: Test with multiple plugin instances
+        // Logic Pro: Test with plugin window resizing
+        // Pro Tools: Test with HDX hardware acceleration
+        // Reaper: Test with custom themes
+        // Studio One: Test with high DPI displays
+    }
+};
+```
 
 ## Success Metrics
 
