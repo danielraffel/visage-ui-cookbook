@@ -1417,6 +1417,1380 @@ public:
 };
 ```
 
+### Common GPU-Accelerated UI Patterns
+
+#### Window/Panel Animation Effects
+
+```cpp
+// Slide-in/out animations for panels
+class SlidePanel : public visage::Frame {
+private:
+    enum SlideDirection { Left, Right, Top, Bottom };
+    float animationProgress_ = 0.0f;
+    bool isShowing_ = false;
+    SlideDirection direction_ = Right;
+    
+public:
+    void show() {
+        isShowing_ = true;
+        startAnimation();
+    }
+    
+    void hide() {
+        isShowing_ = false;
+        startAnimation();
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        canvas.save();
+        
+        // Calculate offset based on animation progress
+        float offset = (1.0f - animationProgress_) * width();
+        if (!isShowing_) offset = -offset;
+        
+        switch (direction_) {
+            case Right:
+                canvas.translate(offset, 0);
+                break;
+            case Left:
+                canvas.translate(-offset, 0);
+                break;
+            case Top:
+                canvas.translate(0, -offset);
+                break;
+            case Bottom:
+                canvas.translate(0, offset);
+                break;
+        }
+        
+        // Optional: Add shadow for depth
+        if (animationProgress_ > 0.01f) {
+            auto shadow = std::make_unique<DropShadowEffect>();
+            shadow->setOffset(5.0f, 5.0f);
+            shadow->setBlurRadius(20.0f);
+            shadow->setShadowColor(0x40000000);
+            canvas.pushEffect(shadow.get());
+        }
+        
+        drawContent(canvas);
+        
+        if (animationProgress_ > 0.01f) {
+            canvas.popEffect();
+        }
+        
+        canvas.restore();
+    }
+};
+```
+
+#### Background Blur/Focus Effects
+
+```cpp
+// Modal/Dialog background blur effect
+class ModalBackground : public visage::Frame {
+private:
+    float blurAmount_ = 0.0f;
+    float targetBlur_ = 20.0f;
+    float opacity_ = 0.0f;
+    float targetOpacity_ = 0.7f;
+    std::unique_ptr<visage::BlurEffect> blurEffect_;
+    
+public:
+    ModalBackground() {
+        blurEffect_ = std::make_unique<visage::BlurEffect>(0.0f);
+    }
+    
+    void show() {
+        targetBlur_ = 20.0f;
+        targetOpacity_ = 0.7f;
+        startTimer(16); // 60fps animation
+    }
+    
+    void hide() {
+        targetBlur_ = 0.0f;
+        targetOpacity_ = 0.0f;
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        // Animate blur
+        blurAmount_ += (targetBlur_ - blurAmount_) * 0.1f;
+        opacity_ += (targetOpacity_ - opacity_) * 0.1f;
+        
+        blurEffect_->setBlurSize(blurAmount_);
+        
+        // Render background content with blur
+        canvas.pushEffect(blurEffect_.get());
+        
+        // Render parent content here or use render-to-texture
+        if (auto* parent = getParentComponent()) {
+            parent->draw(canvas);
+        }
+        
+        canvas.popEffect();
+        
+        // Dark overlay
+        canvas.setColor(0x000000 | (uint32_t(opacity_ * 255) << 24));
+        canvas.fill(0, 0, width(), height());
+    }
+    
+    void timerCallback() override {
+        if (std::abs(blurAmount_ - targetBlur_) < 0.1f &&
+            std::abs(opacity_ - targetOpacity_) < 0.01f) {
+            stopTimer();
+        }
+        redraw();
+    }
+};
+```
+
+#### 3D-Style Flip Animations
+
+```cpp
+// Card flip effect
+class FlipCard : public visage::Frame {
+private:
+    float rotation_ = 0.0f;
+    float targetRotation_ = 0.0f;
+    bool showingFront_ = true;
+    
+public:
+    void flip() {
+        targetRotation_ += M_PI;
+        showingFront_ = !showingFront_;
+        startTimer(16);
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        rotation_ += (targetRotation_ - rotation_) * 0.15f;
+        
+        canvas.save();
+        
+        // Apply 3D rotation transform
+        float perspective = 1000.0f;
+        float centerX = width() / 2.0f;
+        float centerY = height() / 2.0f;
+        
+        // Simple 3D projection
+        canvas.translate(centerX, centerY);
+        float scale = perspective / (perspective + 200.0f * std::sin(rotation_));
+        canvas.scale(std::cos(rotation_) * scale, scale);
+        canvas.translate(-centerX, -centerY);
+        
+        // Draw front or back based on rotation
+        if (std::cos(rotation_) > 0) {
+            drawFrontContent(canvas);
+        } else {
+            canvas.scale(-1.0f, 1.0f); // Flip horizontally
+            canvas.translate(-width(), 0);
+            drawBackContent(canvas);
+        }
+        
+        canvas.restore();
+    }
+};
+```
+
+#### Material Design Ripple Effect
+
+```cpp
+class RippleButton : public visage::Button {
+private:
+    struct Ripple {
+        float x, y;
+        float radius = 0.0f;
+        float maxRadius;
+        float opacity = 0.5f;
+        bool expanding = true;
+    };
+    
+    std::vector<Ripple> ripples_;
+    
+public:
+    void onMouseDown(const visage::MouseEvent& e) override {
+        // Create new ripple at click position
+        Ripple ripple;
+        ripple.x = e.position.x;
+        ripple.y = e.position.y;
+        ripple.maxRadius = std::sqrt(width() * width() + height() * height());
+        ripples_.push_back(ripple);
+        
+        startTimer(16);
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        // Draw button background
+        canvas.setColor(0xff2196f3);
+        canvas.roundedRect(0, 0, width(), height(), 4.0f);
+        
+        // Draw ripples
+        canvas.save();
+        canvas.clipRect(0, 0, width(), height());
+        
+        for (auto& ripple : ripples_) {
+            uint32_t rippleColor = 0xffffff | (uint32_t(ripple.opacity * 100) << 24);
+            canvas.setColor(rippleColor);
+            canvas.circle(ripple.x, ripple.y, ripple.radius);
+        }
+        
+        canvas.restore();
+        
+        // Draw button text
+        drawButtonText(canvas);
+    }
+    
+    void timerCallback() override {
+        bool hasActiveRipples = false;
+        
+        for (auto it = ripples_.begin(); it != ripples_.end();) {
+            it->radius += 8.0f;
+            it->opacity -= 0.02f;
+            
+            if (it->opacity <= 0.0f || it->radius > it->maxRadius) {
+                it = ripples_.erase(it);
+            } else {
+                ++it;
+                hasActiveRipples = true;
+            }
+        }
+        
+        if (!hasActiveRipples) {
+            stopTimer();
+        }
+        
+        redraw();
+    }
+};
+```
+
+#### Elastic/Spring Animations
+
+```cpp
+class ElasticButton : public visage::Button {
+private:
+    float scale_ = 1.0f;
+    float scaleVelocity_ = 0.0f;
+    float targetScale_ = 1.0f;
+    const float springStiffness_ = 300.0f;
+    const float springDamping_ = 20.0f;
+    
+public:
+    void onMouseDown(const visage::MouseEvent& e) override {
+        targetScale_ = 0.95f;
+        startTimer(16);
+    }
+    
+    void onMouseUp(const visage::MouseEvent& e) override {
+        targetScale_ = 1.1f; // Overshoot
+        juce::Timer::callAfterDelay(100, [this]() {
+            targetScale_ = 1.0f;
+        });
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        canvas.save();
+        
+        float centerX = width() / 2.0f;
+        float centerY = height() / 2.0f;
+        
+        canvas.translate(centerX, centerY);
+        canvas.scale(scale_, scale_);
+        canvas.translate(-centerX, -centerY);
+        
+        // Draw button
+        canvas.setColor(0xff4CAF50);
+        canvas.roundedRect(0, 0, width(), height(), 8.0f);
+        
+        canvas.restore();
+    }
+    
+    void timerCallback() override {
+        // Spring physics
+        float force = (targetScale_ - scale_) * springStiffness_;
+        scaleVelocity_ += force / 60.0f; // 60fps
+        scaleVelocity_ *= (1.0f - springDamping_ / 60.0f);
+        scale_ += scaleVelocity_ / 60.0f;
+        
+        if (std::abs(scale_ - targetScale_) < 0.001f && 
+            std::abs(scaleVelocity_) < 0.001f) {
+            scale_ = targetScale_;
+            stopTimer();
+        }
+        
+        redraw();
+    }
+};
+```
+
+#### Morph/Shape Transitions
+
+```cpp
+class MorphingShape : public visage::Frame {
+private:
+    enum Shape { Circle, Square, Triangle, Hexagon };
+    Shape currentShape_ = Circle;
+    Shape targetShape_ = Circle;
+    float morphProgress_ = 0.0f;
+    
+    struct ControlPoint {
+        float x, y;
+        float handleX1, handleY1;
+        float handleX2, handleY2;
+    };
+    
+    std::vector<ControlPoint> currentPoints_;
+    std::vector<ControlPoint> targetPoints_;
+    
+public:
+    void morphTo(Shape shape) {
+        targetShape_ = shape;
+        currentPoints_ = getCurrentShapePoints();
+        targetPoints_ = getShapePoints(shape);
+        morphProgress_ = 0.0f;
+        startTimer(16);
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        canvas.save();
+        
+        // Interpolate between shapes
+        std::vector<ControlPoint> interpolatedPoints;
+        for (size_t i = 0; i < currentPoints_.size(); ++i) {
+            ControlPoint p;
+            p.x = lerp(currentPoints_[i].x, targetPoints_[i].x, morphProgress_);
+            p.y = lerp(currentPoints_[i].y, targetPoints_[i].y, morphProgress_);
+            p.handleX1 = lerp(currentPoints_[i].handleX1, targetPoints_[i].handleX1, morphProgress_);
+            p.handleY1 = lerp(currentPoints_[i].handleY1, targetPoints_[i].handleY1, morphProgress_);
+            p.handleX2 = lerp(currentPoints_[i].handleX2, targetPoints_[i].handleX2, morphProgress_);
+            p.handleY2 = lerp(currentPoints_[i].handleY2, targetPoints_[i].handleY2, morphProgress_);
+            interpolatedPoints.push_back(p);
+        }
+        
+        // Draw morphed shape
+        canvas.setColor(0xff9C27B0);
+        drawBezierPath(canvas, interpolatedPoints);
+        
+        canvas.restore();
+    }
+    
+    void timerCallback() override {
+        morphProgress_ += 0.03f;
+        
+        if (morphProgress_ >= 1.0f) {
+            morphProgress_ = 1.0f;
+            currentShape_ = targetShape_;
+            stopTimer();
+        }
+        
+        redraw();
+    }
+    
+private:
+    float lerp(float a, float b, float t) {
+        return a + (b - a) * t;
+    }
+};
+```
+
+#### Parallax Scrolling
+
+```cpp
+class ParallaxBackground : public visage::Frame {
+private:
+    struct Layer {
+        std::unique_ptr<visage::Image> image;
+        float scrollSpeed;
+        float xOffset = 0.0f;
+        float yOffset = 0.0f;
+        float scale = 1.0f;
+    };
+    
+    std::vector<Layer> layers_;
+    float scrollX_ = 0.0f;
+    float scrollY_ = 0.0f;
+    
+public:
+    void addLayer(std::unique_ptr<visage::Image> image, float speed, float scale = 1.0f) {
+        layers_.push_back({std::move(image), speed, 0.0f, 0.0f, scale});
+    }
+    
+    void setScrollPosition(float x, float y) {
+        scrollX_ = x;
+        scrollY_ = y;
+        
+        for (auto& layer : layers_) {
+            layer.xOffset = -x * layer.scrollSpeed;
+            layer.yOffset = -y * layer.scrollSpeed;
+        }
+        redraw();
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        for (const auto& layer : layers_) {
+            canvas.save();
+            
+            // Apply parallax offset and scale
+            float scaledWidth = layer.image->width() * layer.scale;
+            float scaledHeight = layer.image->height() * layer.scale;
+            
+            canvas.translate(layer.xOffset, layer.yOffset);
+            canvas.scale(layer.scale, layer.scale);
+            
+            // Tile the image if needed
+            float startX = std::fmod(layer.xOffset, scaledWidth);
+            float startY = std::fmod(layer.yOffset, scaledHeight);
+            
+            for (float x = startX - scaledWidth; x < width(); x += scaledWidth) {
+                for (float y = startY - scaledHeight; y < height(); y += scaledHeight) {
+                    canvas.drawImage(*layer.image, x, y);
+                }
+            }
+            
+            canvas.restore();
+        }
+    }
+};
+```
+
+#### Glassmorphism Effect
+
+```cpp
+class GlassmorphicPanel : public visage::Frame {
+private:
+    std::unique_ptr<visage::BlurEffect> blurEffect_;
+    float glassOpacity_ = 0.85f;
+    float borderOpacity_ = 0.3f;
+    
+public:
+    GlassmorphicPanel() {
+        blurEffect_ = std::make_unique<visage::BlurEffect>(15.0f);
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        canvas.save();
+        
+        // Clip to rounded rect
+        canvas.clipRoundedRect(0, 0, width(), height(), 16.0f);
+        
+        // Blur background
+        canvas.pushEffect(blurEffect_.get());
+        renderBackgroundContent(canvas);
+        canvas.popEffect();
+        
+        // Glass overlay with gradient
+        auto gradient = canvas.createLinearGradient(0, 0, 0, height());
+        gradient.addColorStop(0.0f, 0xffffff | (uint32_t(glassOpacity_ * 40) << 24));
+        gradient.addColorStop(1.0f, 0xffffff | (uint32_t(glassOpacity_ * 20) << 24));
+        canvas.setGradient(gradient);
+        canvas.roundedRect(0, 0, width(), height(), 16.0f);
+        
+        // Inner glow
+        canvas.setColor(0xffffff | (uint32_t(glassOpacity_ * 60) << 24));
+        canvas.strokeRoundedRect(1, 1, width() - 2, height() - 2, 15.0f, 1.0f);
+        
+        // Outer border
+        canvas.setColor(0xffffff | (uint32_t(borderOpacity_ * 255) << 24));
+        canvas.strokeRoundedRect(0, 0, width(), height(), 16.0f, 1.0f);
+        
+        canvas.restore();
+        
+        // Draw content
+        drawPanelContent(canvas);
+    }
+};
+```
+
+#### Neumorphism (Soft UI)
+
+```cpp
+class NeumorphicButton : public visage::Button {
+private:
+    bool isPressed_ = false;
+    float pressedAmount_ = 0.0f;
+    
+public:
+    void onMouseDown(const visage::MouseEvent& e) override {
+        isPressed_ = true;
+        startTimer(16);
+    }
+    
+    void onMouseUp(const visage::MouseEvent& e) override {
+        isPressed_ = false;
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        // Animate pressed state
+        float targetPressed = isPressed_ ? 1.0f : 0.0f;
+        pressedAmount_ += (targetPressed - pressedAmount_) * 0.2f;
+        
+        // Background color
+        uint32_t bgColor = 0xffe0e5ec;
+        canvas.setColor(bgColor);
+        canvas.fill(0, 0, width(), height());
+        
+        // Calculate shadow parameters
+        float shadowOffset = 4.0f * (1.0f - pressedAmount_);
+        float shadowBlur = 8.0f * (1.0f - pressedAmount_);
+        float innerShadowOffset = 2.0f * pressedAmount_;
+        
+        // Outer shadows (only when not pressed)
+        if (pressedAmount_ < 0.9f) {
+            // Light shadow
+            auto lightShadow = std::make_unique<DropShadowEffect>();
+            lightShadow->setOffset(-shadowOffset, -shadowOffset);
+            lightShadow->setBlurRadius(shadowBlur);
+            lightShadow->setShadowColor(0x40ffffff);
+            
+            // Dark shadow
+            auto darkShadow = std::make_unique<DropShadowEffect>();
+            darkShadow->setOffset(shadowOffset, shadowOffset);
+            darkShadow->setBlurRadius(shadowBlur);
+            darkShadow->setShadowColor(0x20000000);
+            
+            canvas.pushEffect(lightShadow.get());
+            canvas.pushEffect(darkShadow.get());
+        }
+        
+        // Button shape
+        canvas.setColor(bgColor);
+        canvas.roundedRect(4, 4, width() - 8, height() - 8, 12.0f);
+        
+        // Inner shadow when pressed
+        if (pressedAmount_ > 0.1f) {
+            auto innerShadow = std::make_unique<InnerShadowEffect>();
+            innerShadow->setOffset(innerShadowOffset, innerShadowOffset);
+            innerShadow->setBlurRadius(4.0f * pressedAmount_);
+            innerShadow->setShadowColor(0x30000000 | (uint32_t(pressedAmount_ * 255) << 24));
+            
+            canvas.pushEffect(innerShadow.get());
+            canvas.roundedRect(4, 4, width() - 8, height() - 8, 12.0f);
+            canvas.popEffect();
+        }
+        
+        // Pop outer shadows
+        if (pressedAmount_ < 0.9f) {
+            canvas.popEffect();
+            canvas.popEffect();
+        }
+        
+        // Draw content
+        drawButtonContent(canvas);
+    }
+    
+    void timerCallback() override {
+        if (std::abs(pressedAmount_ - (isPressed_ ? 1.0f : 0.0f)) < 0.01f) {
+            stopTimer();
+        }
+        redraw();
+    }
+};
+```
+
+#### Particle Effects
+
+```cpp
+class ParticleSystem : public visage::Frame, public juce::Timer {
+private:
+    struct Particle {
+        float x, y;
+        float vx, vy;
+        float life;
+        float maxLife;
+        float size;
+        float rotation;
+        float rotationSpeed;
+        uint32_t color;
+        float gravity;
+    };
+    
+    std::vector<Particle> particles_;
+    std::default_random_engine rng_;
+    
+    // Emitter properties
+    float emitterX_ = 0.0f;
+    float emitterY_ = 0.0f;
+    float emissionRate_ = 10.0f;
+    float emissionAngle_ = 0.0f;
+    float emissionSpread_ = M_PI / 4.0f;
+    
+public:
+    ParticleSystem() {
+        startTimerHz(60);
+    }
+    
+    void setEmitterPosition(float x, float y) {
+        emitterX_ = x;
+        emitterY_ = y;
+    }
+    
+    void burst(int count) {
+        for (int i = 0; i < count; ++i) {
+            emitParticle();
+        }
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        // Optional bloom for glow
+        auto bloom = std::make_unique<visage::BloomEffect>();
+        bloom->setIntensity(0.6f);
+        bloom->setThreshold(0.5f);
+        canvas.pushEffect(bloom.get());
+        
+        for (const auto& p : particles_) {
+            canvas.save();
+            
+            // Apply particle transform
+            canvas.translate(p.x, p.y);
+            canvas.rotate(p.rotation);
+            
+            // Fade based on life
+            float alpha = p.life / p.maxLife;
+            uint32_t color = (p.color & 0x00ffffff) | (uint32_t(alpha * 255) << 24);
+            canvas.setColor(color);
+            
+            // Draw particle (can be customized)
+            float currentSize = p.size * (0.5f + 0.5f * alpha); // Shrink as it fades
+            canvas.circle(0, 0, currentSize);
+            
+            canvas.restore();
+        }
+        
+        canvas.popEffect();
+    }
+    
+    void timerCallback() override {
+        // Emit new particles
+        static float emissionAccumulator = 0.0f;
+        emissionAccumulator += emissionRate_ / 60.0f;
+        while (emissionAccumulator >= 1.0f) {
+            emitParticle();
+            emissionAccumulator -= 1.0f;
+        }
+        
+        // Update existing particles
+        for (auto it = particles_.begin(); it != particles_.end();) {
+            // Physics update
+            it->vy += it->gravity;
+            it->x += it->vx;
+            it->y += it->vy;
+            it->rotation += it->rotationSpeed;
+            it->life -= 1.0f / 60.0f;
+            
+            // Remove dead particles
+            if (it->life <= 0 || it->y > height() + 50) {
+                it = particles_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        
+        redraw();
+    }
+    
+private:
+    void emitParticle() {
+        std::uniform_real_distribution<float> angleDist(
+            emissionAngle_ - emissionSpread_,
+            emissionAngle_ + emissionSpread_
+        );
+        std::uniform_real_distribution<float> speedDist(2.0f, 5.0f);
+        std::uniform_real_distribution<float> sizeDist(2.0f, 8.0f);
+        std::uniform_real_distribution<float> lifeDist(1.0f, 3.0f);
+        std::uniform_real_distribution<float> rotSpeedDist(-0.1f, 0.1f);
+        
+        Particle p;
+        p.x = emitterX_;
+        p.y = emitterY_;
+        
+        float angle = angleDist(rng_);
+        float speed = speedDist(rng_);
+        p.vx = std::cos(angle) * speed;
+        p.vy = std::sin(angle) * speed;
+        
+        p.maxLife = lifeDist(rng_);
+        p.life = p.maxLife;
+        p.size = sizeDist(rng_);
+        p.rotation = 0.0f;
+        p.rotationSpeed = rotSpeedDist(rng_);
+        p.color = 0xff00a0ff; // Can be randomized
+        p.gravity = 0.1f;
+        
+        particles_.push_back(p);
+    }
+};
+```
+
+#### Skeleton Loading Animation
+
+```cpp
+class SkeletonLoader : public visage::Frame {
+private:
+    float shimmerPosition_ = -0.3f;
+    
+public:
+    SkeletonLoader() {
+        startTimer(16);
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        // Base skeleton color
+        uint32_t baseColor = 0xffe0e0e0;
+        uint32_t shimmerColor = 0xfff0f0f0;
+        
+        // Draw skeleton shapes
+        canvas.setColor(baseColor);
+        
+        // Title skeleton
+        canvas.roundedRect(20, 20, width() * 0.6f, 20, 4.0f);
+        
+        // Subtitle skeleton
+        canvas.roundedRect(20, 50, width() * 0.4f, 16, 4.0f);
+        
+        // Content skeletons
+        for (int i = 0; i < 3; ++i) {
+            float y = 90 + i * 30;
+            canvas.roundedRect(20, y, width() - 40, 12, 4.0f);
+        }
+        
+        // Animated shimmer effect
+        canvas.save();
+        canvas.clipRect(0, 0, width(), height());
+        
+        // Create gradient for shimmer
+        float shimmerX = width() * shimmerPosition_;
+        auto gradient = canvas.createLinearGradient(
+            shimmerX - 100, 0,
+            shimmerX + 100, 0
+        );
+        gradient.addColorStop(0.0f, baseColor);
+        gradient.addColorStop(0.5f, shimmerColor);
+        gradient.addColorStop(1.0f, baseColor);
+        
+        canvas.setGradient(gradient);
+        canvas.fill(0, 0, width(), height());
+        
+        canvas.restore();
+    }
+    
+    void timerCallback() override {
+        shimmerPosition_ += 0.01f;
+        if (shimmerPosition_ > 1.3f) {
+            shimmerPosition_ = -0.3f;
+        }
+        redraw();
+    }
+};
+```
+
+#### Liquid/Metaball Effect
+
+```cpp
+class MetaballEffect : public visage::Frame {
+private:
+    struct Ball {
+        float x, y;
+        float vx, vy;
+        float radius;
+    };
+    
+    std::vector<Ball> balls_;
+    std::unique_ptr<visage::BlurEffect> blurEffect_;
+    
+public:
+    MetaballEffect() {
+        blurEffect_ = std::make_unique<visage::BlurEffect>(8.0f);
+        
+        // Initialize some metaballs
+        for (int i = 0; i < 5; ++i) {
+            Ball ball;
+            ball.x = random.nextFloat() * width();
+            ball.y = random.nextFloat() * height();
+            ball.vx = (random.nextFloat() - 0.5f) * 2.0f;
+            ball.vy = (random.nextFloat() - 0.5f) * 2.0f;
+            ball.radius = 30.0f + random.nextFloat() * 20.0f;
+            balls_.push_back(ball);
+        }
+        
+        startTimer(16);
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        // Draw metaballs with blur to create liquid effect
+        canvas.pushEffect(blurEffect_.get());
+        
+        // Draw balls
+        for (const auto& ball : balls_) {
+            canvas.setColor(0xff0080ff);
+            canvas.circle(ball.x, ball.y, ball.radius);
+        }
+        
+        canvas.popEffect();
+        
+        // Apply threshold to create sharp edges
+        auto thresholdEffect = std::make_unique<ThresholdEffect>();
+        thresholdEffect->setThreshold(0.5f);
+        canvas.pushEffect(thresholdEffect.get());
+        
+        // Redraw to apply threshold
+        canvas.fill(0, 0, width(), height());
+        
+        canvas.popEffect();
+    }
+    
+    void timerCallback() override {
+        // Update ball positions
+        for (auto& ball : balls_) {
+            ball.x += ball.vx;
+            ball.y += ball.vy;
+            
+            // Bounce off walls
+            if (ball.x - ball.radius < 0 || ball.x + ball.radius > width()) {
+                ball.vx = -ball.vx;
+            }
+            if (ball.y - ball.radius < 0 || ball.y + ball.radius > height()) {
+                ball.vy = -ball.vy;
+            }
+            
+            // Keep in bounds
+            ball.x = std::clamp(ball.x, ball.radius, width() - ball.radius);
+            ball.y = std::clamp(ball.y, ball.radius, height() - ball.radius);
+        }
+        
+        redraw();
+    }
+};
+```
+
+#### Accordion/Collapse Animation
+
+```cpp
+class AccordionPanel : public visage::Frame {
+private:
+    struct Section {
+        std::string title;
+        std::unique_ptr<visage::Frame> content;
+        float height;
+        float currentHeight = 0.0f;
+        bool isExpanded = false;
+    };
+    
+    std::vector<Section> sections_;
+    float headerHeight_ = 40.0f;
+    
+public:
+    void addSection(const std::string& title, std::unique_ptr<visage::Frame> content) {
+        Section section;
+        section.title = title;
+        section.height = content->height();
+        section.content = std::move(content);
+        sections_.push_back(std::move(section));
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        float y = 0;
+        
+        for (size_t i = 0; i < sections_.size(); ++i) {
+            auto& section = sections_[i];
+            
+            // Draw header
+            canvas.setColor(0xff3f51b5);
+            canvas.fill(0, y, width(), headerHeight_);
+            
+            // Draw title
+            auto* font = FontManager::instance().getFont(
+                FontManager::FontType::Bold, 16.0f);
+            canvas.setColor(0xffffffff);
+            visage::String titleText(section.title.c_str());
+            canvas.text(titleText, *font, visage::Font::kLeft,
+                       20, y, width() - 40, headerHeight_);
+            
+            // Draw expand/collapse indicator
+            float indicatorX = width() - 30;
+            float indicatorY = y + headerHeight_ / 2;
+            float rotation = section.isExpanded ? M_PI / 2 : 0;
+            
+            canvas.save();
+            canvas.translate(indicatorX, indicatorY);
+            canvas.rotate(rotation);
+            drawArrow(canvas);
+            canvas.restore();
+            
+            y += headerHeight_;
+            
+            // Draw content if expanded
+            if (section.currentHeight > 0.1f) {
+                canvas.save();
+                canvas.clipRect(0, y, width(), section.currentHeight);
+                
+                section.content->setBounds(0, y, width(), section.height);
+                section.content->draw(canvas);
+                
+                canvas.restore();
+                
+                y += section.currentHeight;
+            }
+            
+            // Separator
+            canvas.setColor(0x20000000);
+            canvas.fill(0, y - 1, width(), 1);
+        }
+    }
+    
+    void onMouseDown(const visage::MouseEvent& e) override {
+        float y = 0;
+        
+        for (auto& section : sections_) {
+            if (e.position.y >= y && e.position.y < y + headerHeight_) {
+                section.isExpanded = !section.isExpanded;
+                startTimer(16);
+                break;
+            }
+            
+            y += headerHeight_ + section.currentHeight;
+        }
+    }
+    
+    void timerCallback() override {
+        bool animating = false;
+        
+        for (auto& section : sections_) {
+            float targetHeight = section.isExpanded ? section.height : 0.0f;
+            float diff = targetHeight - section.currentHeight;
+            
+            if (std::abs(diff) > 0.1f) {
+                section.currentHeight += diff * 0.2f;
+                animating = true;
+            } else {
+                section.currentHeight = targetHeight;
+            }
+        }
+        
+        if (!animating) {
+            stopTimer();
+        }
+        
+        redraw();
+    }
+    
+private:
+    void drawArrow(visage::Canvas& canvas) {
+        canvas.setColor(0xffffffff);
+        canvas.moveTo(-5, -3);
+        canvas.lineTo(5, 0);
+        canvas.lineTo(-5, 3);
+        canvas.closePath();
+        canvas.fill();
+    }
+};
+```
+
+#### Progress/Loading Animations
+
+```cpp
+class CircularProgress : public visage::Frame {
+private:
+    float progress_ = 0.0f;
+    float rotation_ = 0.0f;
+    bool isIndeterminate_ = true;
+    
+public:
+    CircularProgress() {
+        startTimer(16);
+    }
+    
+    void setProgress(float progress) {
+        progress_ = std::clamp(progress, 0.0f, 1.0f);
+        isIndeterminate_ = false;
+    }
+    
+    void setIndeterminate(bool indeterminate) {
+        isIndeterminate_ = indeterminate;
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        float centerX = width() / 2.0f;
+        float centerY = height() / 2.0f;
+        float radius = std::min(width(), height()) / 2.0f - 4.0f;
+        
+        // Background circle
+        canvas.setColor(0x20000000);
+        canvas.setLineWidth(4.0f);
+        canvas.strokeCircle(centerX, centerY, radius);
+        
+        // Progress arc
+        canvas.setColor(0xff2196f3);
+        canvas.setLineWidth(4.0f);
+        
+        if (isIndeterminate_) {
+            // Rotating arc for indeterminate progress
+            float arcLength = M_PI / 2;
+            float startAngle = rotation_;
+            float endAngle = rotation_ + arcLength;
+            
+            canvas.arc(centerX, centerY, radius, startAngle, endAngle);
+            canvas.stroke();
+            
+            // Secondary arc
+            float secondaryStart = rotation_ + M_PI;
+            float secondaryEnd = secondaryStart + arcLength / 2;
+            canvas.setColor(0x802196f3);
+            canvas.arc(centerX, centerY, radius, secondaryStart, secondaryEnd);
+            canvas.stroke();
+        } else {
+            // Fixed arc for determinate progress
+            float startAngle = -M_PI / 2;
+            float endAngle = startAngle + (2 * M_PI * progress_);
+            
+            canvas.arc(centerX, centerY, radius, startAngle, endAngle);
+            canvas.stroke();
+            
+            // Percentage text
+            if (progress_ > 0.0f) {
+                auto* font = FontManager::instance().getFont(
+                    FontManager::FontType::Regular, 14.0f);
+                std::string percentText = std::to_string(int(progress_ * 100)) + "%";
+                visage::String visageText(percentText.c_str());
+                canvas.setColor(0xff333333);
+                canvas.text(visageText, *font, visage::Font::kCenter,
+                           0, 0, width(), height());
+            }
+        }
+    }
+    
+    void timerCallback() override {
+        if (isIndeterminate_) {
+            rotation_ += 0.05f;
+            if (rotation_ > 2 * M_PI) {
+                rotation_ -= 2 * M_PI;
+            }
+            redraw();
+        }
+    }
+};
+```
+
+### Performance Tips for Common Effects
+
+#### Effect Performance Best Practices
+
+```cpp
+// 1. Cache effect instances instead of creating new ones
+class OptimizedEffectComponent : public visage::Frame {
+private:
+    // Good: Reuse effect instances
+    std::unique_ptr<visage::BlurEffect> cachedBlur_;
+    std::unique_ptr<visage::BloomEffect> cachedBloom_;
+    
+    // Bad: Creating effects in draw()
+    void badDraw(visage::Canvas& canvas) {
+        canvas.pushEffect(std::make_unique<visage::BlurEffect>(10.0f)); // Allocates every frame!
+    }
+    
+    // Good: Reuse cached effects
+    void goodDraw(visage::Canvas& canvas) {
+        canvas.pushEffect(cachedBlur_.get());
+    }
+};
+
+// 2. Use level-of-detail for effects
+class LODEffectComponent : public visage::Frame {
+    void draw(visage::Canvas& canvas) override {
+        float quality = getQualityLevel();
+        
+        if (quality >= 1.0f) {
+            // High quality: All effects
+            canvas.pushEffect(shadowEffect_.get());
+            canvas.pushEffect(blurEffect_.get());
+            canvas.pushEffect(bloomEffect_.get());
+        } else if (quality >= 0.5f) {
+            // Medium: Skip expensive effects
+            canvas.pushEffect(shadowEffect_.get());
+        }
+        // Low quality: No effects
+        
+        drawContent(canvas);
+        
+        // Pop effects based on quality level
+    }
+};
+
+// 3. Batch similar effects
+class BatchedEffects : public visage::Frame {
+    void draw(visage::Canvas& canvas) override {
+        // Good: Apply blur once to multiple elements
+        canvas.pushEffect(blurEffect_.get());
+        drawAllBlurredElements(canvas);
+        canvas.popEffect();
+        
+        // Bad: Applying blur to each element separately
+        for (auto& element : elements_) {
+            canvas.pushEffect(blurEffect_.get());
+            element->draw(canvas);
+            canvas.popEffect();
+        }
+    }
+};
+
+// 4. Use render-to-texture for complex static content
+class CachedComplexContent : public visage::Frame {
+private:
+    std::unique_ptr<visage::RenderTexture> cachedTexture_;
+    bool needsRedraw_ = true;
+    
+public:
+    void invalidateCache() {
+        needsRedraw_ = true;
+    }
+    
+    void draw(visage::Canvas& canvas) override {
+        if (needsRedraw_) {
+            // Render to texture
+            cachedTexture_ = std::make_unique<visage::RenderTexture>(width(), height());
+            visage::Canvas textureCanvas;
+            textureCanvas.setRenderTarget(cachedTexture_.get());
+            
+            // Draw complex content once
+            drawComplexContent(textureCanvas);
+            
+            textureCanvas.submit();
+            needsRedraw_ = false;
+        }
+        
+        // Draw cached texture
+        canvas.drawTexture(*cachedTexture_, 0, 0);
+    }
+};
+
+// 5. Optimize animation frame rates
+class AdaptiveAnimation : public visage::Frame, public juce::Timer {
+private:
+    std::chrono::steady_clock::time_point lastFrame_;
+    float targetFPS_ = 60.0f;
+    float currentFPS_ = 60.0f;
+    
+public:
+    void startAdaptiveAnimation() {
+        lastFrame_ = std::chrono::steady_clock::now();
+        startTimer(16); // Start at 60fps
+    }
+    
+    void timerCallback() override {
+        auto now = std::chrono::steady_clock::now();
+        auto frameTime = std::chrono::duration<float, std::milli>(now - lastFrame_).count();
+        lastFrame_ = now;
+        
+        // Calculate actual FPS
+        currentFPS_ = 1000.0f / frameTime;
+        
+        // Adapt animation complexity based on performance
+        if (currentFPS_ < targetFPS_ * 0.9f) {
+            // Reduce quality or skip frames
+            reduceAnimationQuality();
+        } else if (currentFPS_ > targetFPS_ * 0.95f) {
+            // Can increase quality
+            increaseAnimationQuality();
+        }
+        
+        updateAnimation(frameTime);
+        redraw();
+    }
+};
+```
+
+### Learning from Popular Libraries
+
+#### Dear ImGui Pattern: Immediate Mode
+
+```cpp
+// Immediate mode inspired pattern for Visage
+class ImmediateModeUI {
+    static bool Button(visage::Canvas& canvas, const std::string& label, 
+                      float x, float y, float w, float h) {
+        static std::map<std::string, bool> buttonStates;
+        bool& isHovered = buttonStates[label + "_hover"];
+        bool& isPressed = buttonStates[label + "_press"];
+        
+        // Check mouse interaction
+        auto mousePos = getMousePosition();
+        bool inBounds = mousePos.x >= x && mousePos.x <= x + w &&
+                       mousePos.y >= y && mousePos.y <= y + h;
+        
+        isHovered = inBounds;
+        if (inBounds && isMousePressed()) {
+            isPressed = true;
+        } else if (!isMousePressed()) {
+            isPressed = false;
+        }
+        
+        // Draw button
+        uint32_t color = isPressed ? 0xff1976d2 : (isHovered ? 0xff2196f3 : 0xff42a5f5);
+        canvas.setColor(color);
+        canvas.roundedRect(x, y, w, h, 4.0f);
+        
+        // Draw label
+        auto* font = FontManager::instance().getFont(FontManager::FontType::Regular, 14.0f);
+        canvas.setColor(0xffffffff);
+        visage::String text(label.c_str());
+        canvas.text(text, *font, visage::Font::kCenter, x, y, w, h);
+        
+        return isPressed && !isMousePressed(); // Click on release
+    }
+};
+```
+
+#### Flutter Pattern: Widget Composition
+
+```cpp
+// Flutter-inspired widget composition
+class VisageWidget {
+public:
+    virtual void build(visage::Canvas& canvas) = 0;
+};
+
+class Container : public VisageWidget {
+private:
+    std::unique_ptr<VisageWidget> child_;
+    float padding_ = 0.0f;
+    uint32_t color_ = 0x00000000;
+    float borderRadius_ = 0.0f;
+    
+public:
+    Container& padding(float p) { padding_ = p; return *this; }
+    Container& color(uint32_t c) { color_ = c; return *this; }
+    Container& borderRadius(float r) { borderRadius_ = r; return *this; }
+    Container& child(std::unique_ptr<VisageWidget> c) { 
+        child_ = std::move(c); 
+        return *this; 
+    }
+    
+    void build(visage::Canvas& canvas) override {
+        if (color_ != 0x00000000) {
+            canvas.setColor(color_);
+            if (borderRadius_ > 0) {
+                canvas.roundedRect(0, 0, width(), height(), borderRadius_);
+            } else {
+                canvas.fill(0, 0, width(), height());
+            }
+        }
+        
+        if (child_) {
+            canvas.save();
+            canvas.translate(padding_, padding_);
+            child_->build(canvas);
+            canvas.restore();
+        }
+    }
+};
+```
+
+#### Three.js Pattern: Effect Composer
+
+```cpp
+// Three.js inspired effect composer
+class EffectComposer {
+private:
+    std::vector<std::unique_ptr<visage::PostEffect>> effectChain_;
+    std::unique_ptr<visage::RenderTexture> pingTexture_;
+    std::unique_ptr<visage::RenderTexture> pongTexture_;
+    
+public:
+    void addEffect(std::unique_ptr<visage::PostEffect> effect) {
+        effectChain_.push_back(std::move(effect));
+    }
+    
+    void render(visage::Canvas& canvas, visage::Frame* content) {
+        // Initialize render textures if needed
+        if (!pingTexture_) {
+            pingTexture_ = std::make_unique<visage::RenderTexture>(
+                content->width(), content->height());
+            pongTexture_ = std::make_unique<visage::RenderTexture>(
+                content->width(), content->height());
+        }
+        
+        // Render initial content to first texture
+        visage::Canvas tempCanvas;
+        tempCanvas.setRenderTarget(pingTexture_.get());
+        content->draw(tempCanvas);
+        tempCanvas.submit();
+        
+        // Apply effects in sequence
+        bool usePing = false;
+        for (size_t i = 0; i < effectChain_.size(); ++i) {
+            auto& effect = effectChain_[i];
+            
+            tempCanvas.setRenderTarget(usePing ? pongTexture_.get() : pingTexture_.get());
+            tempCanvas.pushEffect(effect.get());
+            tempCanvas.drawTexture(*(usePing ? pingTexture_ : pongTexture_), 0, 0);
+            tempCanvas.popEffect();
+            tempCanvas.submit();
+            
+            usePing = !usePing;
+        }
+        
+        // Draw final result
+        canvas.drawTexture(*(usePing ? pingTexture_ : pongTexture_), 0, 0);
+    }
+};
+```
+
+#### Skia Pattern: Path Effects
+
+```cpp
+// Skia-inspired path effects
+class PathEffect {
+public:
+    virtual void applyToPath(std::vector<visage::Point>& points) = 0;
+};
+
+class DashPathEffect : public PathEffect {
+private:
+    float dashLength_ = 10.0f;
+    float gapLength_ = 5.0f;
+    
+public:
+    void applyToPath(std::vector<visage::Point>& points) override {
+        std::vector<visage::Point> dashedPoints;
+        float distance = 0.0f;
+        bool drawing = true;
+        
+        for (size_t i = 1; i < points.size(); ++i) {
+            visage::Point p1 = points[i - 1];
+            visage::Point p2 = points[i];
+            
+            float segmentLength = std::sqrt(
+                (p2.x - p1.x) * (p2.x - p1.x) + 
+                (p2.y - p1.y) * (p2.y - p1.y)
+            );
+            
+            float traveled = 0.0f;
+            while (traveled < segmentLength) {
+                float remaining = drawing ? dashLength_ : gapLength_;
+                float step = std::min(remaining - distance, segmentLength - traveled);
+                
+                float t = (traveled + step) / segmentLength;
+                visage::Point interpolated{
+                    p1.x + (p2.x - p1.x) * t,
+                    p1.y + (p2.y - p1.y) * t
+                };
+                
+                if (drawing) {
+                    dashedPoints.push_back(interpolated);
+                }
+                
+                distance += step;
+                traveled += step;
+                
+                if (distance >= remaining) {
+                    drawing = !drawing;
+                    distance = 0.0f;
+                }
+            }
+        }
+        
+        points = dashedPoints;
+    }
+};
+```
+
 
 ## Build System Integration
 
