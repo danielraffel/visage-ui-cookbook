@@ -1,21 +1,6 @@
-# Visage UI Framework — Verified API Reference & Migration Guide
+# Visage UI Framework — Verified API Reference & JUCE Migration Guide
 
-> All code examples verified against the [Visage source](https://github.com/VitalAudio/visage) (patched fork: [danielraffel/visage](https://github.com/danielraffel/visage)).
-
-## Which Resource Should You Use?
-
-This document (`visage_prompt.md`) is an **AI-agnostic API reference** — it works with any AI assistant, IDE, or as a standalone reference for developers working with Visage. Use it when you need to look up Visage API signatures, understand the architecture, or translate JUCE patterns to Visage equivalents.
-
-If you're using **Claude Code** specifically, two additional resources provide deeper automation:
-
-| Resource | What it is | Who it's for |
-|----------|-----------|--------------|
-| **This file** (`visage_prompt.md`) | Verified Visage API reference and JUCE migration guide | Any developer or AI assistant working with Visage |
-| [`juce-visage` skill](https://github.com/danielraffel/generous-corp-marketplace/tree/master/skills/juce-visage) | Claude Code skill with production-tested JUCE+Visage integration patterns: Metal embedding, event bridging, DAW keyboard handling, destruction ordering, popup/modal/dropdown systems | Claude Code users building JUCE plugins with Visage UI |
-| [JUCE-Plugin-Starter](https://github.com/danielraffel/JUCE-Plugin-Starter) | Claude Code-friendly project template with build automation, code signing, notarization, auto-versioning, installer generation, and GitHub Pages landing page | Claude Code users starting a new JUCE audio plugin from scratch (optional Visage integration) |
-| [`danielraffel/visage` fork](https://github.com/danielraffel/visage) | Visage with production patches (plugin text editing, Cmd+Q propagation, 60 FPS cap, popup overflow fix) | Anyone using Visage in a DAW plugin context |
-
-**TL;DR**: Start with this file for API reference. Add the `juce-visage` skill if you're using Claude Code for JUCE+Visage work. Use JUCE-Plugin-Starter if you're creating a brand new plugin project with Claude Code.
+> All examples verified against [danielraffel/visage](https://github.com/danielraffel/visage) (patched fork). See the [repo README](https://github.com/danielraffel/visage-ui-cookbook) for related resources.
 
 ---
 

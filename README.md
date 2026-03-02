@@ -7,18 +7,15 @@ API reference and migration guide for [Visage](https://github.com/VitalAudio/vis
 
 ## Which Resource Should You Use?
 
-**`visage_prompt.md`** (this repo) is an **AI-agnostic API reference** — it works with any AI assistant, IDE, or as a standalone developer reference. Use it to look up Visage API signatures, understand the architecture, or translate JUCE patterns to Visage.
+**`visage_prompt.md`** (this repo) is an **AI-agnostic API reference** — it works with any AI assistant, IDE, or as a standalone developer reference.
 
-If you use **Claude Code**, two additional resources provide deeper automation:
+If you use **Claude Code**, these additional resources provide deeper automation:
 
 | Resource | What it is | Who it's for |
 |----------|-----------|--------------|
-| **`visage_prompt.md`** (this repo) | Verified Visage API reference and JUCE migration guide | Any developer or AI assistant |
 | **[`juce-visage` skill](https://github.com/danielraffel/generous-corp-marketplace/tree/master/skills/juce-visage)** | Claude Code skill: Metal embedding, event bridging, DAW keyboard handling, destruction ordering, popup/modal/dropdown systems | Claude Code users building JUCE plugins with Visage |
 | **[JUCE-Plugin-Starter](https://github.com/danielraffel/JUCE-Plugin-Starter)** | Claude Code-friendly project template: build automation, code signing, notarization, auto-versioning, installer generation | Claude Code users starting a new JUCE plugin from scratch |
 | **[`danielraffel/visage` fork](https://github.com/danielraffel/visage)** | Visage with production patches (plugin text editing, Cmd+Q, 60 FPS cap, popup fix) | Anyone using Visage in DAW plugins |
-
-**TL;DR**: Start here for API reference. Add `juce-visage` skill for Claude Code JUCE+Visage work. Use JUCE-Plugin-Starter for new plugin projects with Claude Code.
 
 ## What's in `visage_prompt.md`
 
