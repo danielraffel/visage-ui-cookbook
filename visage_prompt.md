@@ -1,10 +1,12 @@
 # Visage UI Framework Migration Guide for AI Assistants
 
-*A comprehensive guide for AI assistants helping developers migrate from JUCE to Visage or create new Visage UIs*
+> **OUTDATED**: This guide was generated before the [`juce-visage` Claude skill](https://github.com/danielraffel/generous-corp-marketplace/tree/master/skills/juce-visage) existed and has significant accuracy issues. Many code examples use fabricated API calls. For production JUCE+Visage integration, use the skill instead. The patched Visage fork is at [danielraffel/visage](https://github.com/danielraffel/visage).
+
+*An early guide for AI assistants helping developers migrate from JUCE to Visage or create new Visage UIs*
 
 ## Overview
 
-Visage is a modern GPU-accelerated UI framework using bgfx for cross-platform rendering. This guide helps AI assistants understand key differences from JUCE and provide effective migration assistance.
+Visage is a modern GPU-accelerated UI framework for cross-platform rendering (Metal on macOS). This guide covers key differences from JUCE but **many code examples below have not been verified against the actual Visage API** — always check the [Visage source](https://github.com/VitalAudio/visage) before using them.
 
 ## Quick Start - Minimal Working Example
 
