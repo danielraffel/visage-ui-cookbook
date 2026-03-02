@@ -1,30 +1,41 @@
 <!-- readme.md -->
 # Visage UI Cookbook
 
-Tips for pairing [Visage](https://github.com/VitalAudio/visage) — a lightweight, GPU-accelerated C++ UI framework — with [JUCE](https://github.com/juce-framework/JUCE) audio plugins.
+API reference and migration guide for [Visage](https://github.com/VitalAudio/visage) — a lightweight, GPU-accelerated C++ UI framework — with [JUCE](https://github.com/juce-framework/JUCE) audio plugins.
 
-> **Note**: This cookbook predates the [`juce-visage` Claude skill](https://github.com/danielraffel/generous-corp-marketplace/tree/master/skills/juce-visage) and the [`juce-dev` plugin](https://github.com/danielraffel/generous-corp-marketplace/tree/master/plugins/juce-dev), which are actively maintained and more accurate. **Use those instead for new projects.**
+> All code examples in `visage_prompt.md` have been verified against the actual Visage source code ([danielraffel/visage](https://github.com/danielraffel/visage) patched fork).
 
-## Recommended Resources
+## Which Resource Should You Use?
 
-| Resource | What it covers | Status |
-|----------|---------------|--------|
-| **[`juce-visage` skill](https://github.com/danielraffel/generous-corp-marketplace/tree/master/skills/juce-visage)** | Production-tested JUCE+Visage integration patterns: Metal embedding, event bridging, DAW keyboard handling, destruction ordering, popup/modal/dropdown systems, required Visage patches | **Actively maintained** |
-| **[`juce-dev` plugin](https://github.com/danielraffel/generous-corp-marketplace/tree/master/plugins/juce-dev)** | Automates creating new JUCE plugin projects from a template, with optional Visage integration | **Actively maintained** |
-| **[`danielraffel/visage` fork](https://github.com/danielraffel/visage)** | Visage with production patches applied (performKeyEquivalent for plugin text editing, Cmd+Q propagation, 60 FPS cap, popup overflow fix) | **Actively maintained** |
-| **`visage_prompt.md`** (this repo) | Early migration guide for JUCE to Visage | **Outdated — see warning below** |
+**`visage_prompt.md`** (this repo) is an **AI-agnostic API reference** — it works with any AI assistant, IDE, or as a standalone developer reference. Use it to look up Visage API signatures, understand the architecture, or translate JUCE patterns to Visage.
 
-## About `visage_prompt.md`
+If you use **Claude Code**, two additional resources provide deeper automation:
 
-`visage_prompt.md` was an early attempt at a comprehensive JUCE-to-Visage migration guide, generated before the skill and plugin existed. **It has known accuracy issues:**
+| Resource | What it is | Who it's for |
+|----------|-----------|--------------|
+| **`visage_prompt.md`** (this repo) | Verified Visage API reference and JUCE migration guide | Any developer or AI assistant |
+| **[`juce-visage` skill](https://github.com/danielraffel/generous-corp-marketplace/tree/master/skills/juce-visage)** | Claude Code skill: Metal embedding, event bridging, DAW keyboard handling, destruction ordering, popup/modal/dropdown systems | Claude Code users building JUCE plugins with Visage |
+| **[JUCE-Plugin-Starter](https://github.com/danielraffel/JUCE-Plugin-Starter)** | Claude Code-friendly project template: build automation, code signing, notarization, auto-versioning, installer generation | Claude Code users starting a new JUCE plugin from scratch |
+| **[`danielraffel/visage` fork](https://github.com/danielraffel/visage)** | Visage with production patches (plugin text editing, Cmd+Q, 60 FPS cap, popup fix) | Anyone using Visage in DAW plugins |
 
-- Many code examples use API calls that don't exist in Visage (`canvas.save()`, `canvas.translate()`, `canvas.clipRect()`, etc.)
-- Effect class names are wrong (`BlurEffect` should be `BlurPostEffect`, etc.)
-- Several "effect" classes are fabricated (`DropShadowEffect`, `FilmGrainEffect`, `ChromaticAberrationEffect`)
-- Critical production patterns are missing (destruction ordering, Visage patches, focus management, AU/VST3 startup optimization)
+**TL;DR**: Start here for API reference. Add `juce-visage` skill for Claude Code JUCE+Visage work. Use JUCE-Plugin-Starter for new plugin projects with Claude Code.
 
-The general concepts (Frame vs Component, draw vs paint, migration priorities) are valid, but **don't trust the code examples without verifying against the [actual Visage source](https://github.com/VitalAudio/visage)**.
+## What's in `visage_prompt.md`
+
+- Architecture overview (Frame tree, Canvas drawing, GPU rendering, Palette/Theme)
+- Complete Frame API reference (lifecycle, mouse, keyboard, children, bounds, layout, effects)
+- Complete Canvas API reference (shapes, text, images, shaders, color/brush, state)
+- Color, Brush & Theme system
+- Font & Text system
+- PostEffect system (Blur, Bloom, Shader — only the real ones)
+- Widget classes (Button, PopupMenu, ScrollableFrame, TextEditor)
+- Window & Application (standalone and plugin embedding)
+- Event system (MouseEvent, KeyEvent, EventTimer)
+- Dimension system (_px, _vw, _vh, _vmin, _vmax)
+- JUCE-to-Visage migration patterns with side-by-side tables
+- Plugin integration essentials (Metal embedding, destruction ordering, DAW keyboard handling)
+- Build system (CMake, file embedding)
 
 ## Contributing
 
-MIT licensed. If you'd like to help create an accurate API reference by verifying examples against the Visage source code, PRs are welcome.
+MIT licensed. PRs welcome.
