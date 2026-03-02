@@ -992,6 +992,7 @@ canvas.setColor(SliderThumb);                   // Use in draw()
 5. **`draw()` is called per frame** — Unlike JUCE's `paint()` which is called on-demand, `draw()` runs every frame when the region is dirty. Call `redraw()` to mark dirty.
 6. **Children are not automatically positioned** — Without flex layout, you must manually `setBounds()` children in `resized()`.
 7. **Thread model** — Drawing happens on the render thread. Use `runOnEventThread()` for thread-safe callbacks.
+8. **`setDpiScale()` does NOT recalculate `native_bounds_`** — This is a critical bug in upstream Visage. When `setBounds()` is called, it computes `native_bounds_ = (bounds * dpi_scale_).round()`. If DPI changes later (e.g., via `addChild` propagation from a Retina-aware parent), `native_bounds_` is NOT updated. Child frames end up with wrong region sizes and render at ~50% size on Retina displays. **Fix**: Patch `setDpiScale()` in `frame.h` to recalculate native bounds when DPI changes, AND always set child bounds from `resized()`/`layoutChildren()` (not just once in setup). See Section 12 for the patch.
 
 ---
 
@@ -1027,6 +1028,43 @@ Required patches (in `danielraffel/visage`):
 2. **Cmd+Q propagation** — Forwards unhandled command-key events to the next responder
 3. **60 FPS cap** — MTKView frame rate cap to prevent excessive CPU usage
 4. **Popup overflow positioning** — Fixes popup menus appearing at wrong position for bottom items
+5. **setDpiScale native_bounds recalculation** — **Required for Retina displays.** Without this patch, child frames whose `setBounds()` is called before DPI propagation (the normal case) render at ~50% size on Retina. Patch `frame.h`:
+
+```cpp
+// In Frame::setDpiScale() — add native_bounds recalculation after dpi_scale_ assignment:
+void setDpiScale(float dpi_scale) {
+    bool changed = dpi_scale_ != dpi_scale;
+    dpi_scale_ = dpi_scale;
+
+    if (changed) {
+        // PATCH: Recalculate native bounds with new DPI scale
+        IBounds new_native_bounds = (bounds_ * dpi_scale_).round();
+        if (native_bounds_ != new_native_bounds) {
+            native_bounds_ = new_native_bounds;
+            region_.setBounds(native_bounds_.x(), native_bounds_.y(),
+                              native_bounds_.width(), native_bounds_.height());
+        }
+
+        on_dpi_change_.callback();
+        redraw();
+    }
+
+    for (Frame* child : children_)
+        child->setDpiScale(dpi_scale);
+}
+```
+
+As defense-in-depth, always set child bounds from `resized()` (not just once during setup):
+
+```cpp
+void MyEditor::resized() {
+    if (bridge) bridge->setBounds(getLocalBounds());
+    if (rootFrame) {
+        rootFrame->setBounds(0, 0, getWidth(), getHeight());
+        layoutChildren();  // Re-set all child bounds
+    }
+}
+```
 
 ### AU/VST Startup Optimization
 
