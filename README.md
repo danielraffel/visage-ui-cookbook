@@ -11,7 +11,7 @@ API reference and migration guide for [Visage](https://github.com/VitalAudio/vis
 |----------|-----------|--------------|
 | **[`visage_prompt.md`](visage_prompt.md)** | AI-agnostic Visage API reference and JUCE migration guide | Any developer or AI assistant working with Visage |
 | **[`juce-visage` skill](https://github.com/danielraffel/generous-corp-marketplace/tree/master/skills/juce-visage)** | Claude Code skill: Metal embedding, event bridging, DAW keyboard handling, destruction ordering, popup/modal/dropdown systems | Claude Code users building macOS JUCE plugins with Visage |
-| **[JUCE-Plugin-Starter](https://github.com/danielraffel/JUCE-Plugin-Starter)** | Claude Code-friendly project template: build automation, code signing, notarization, auto-versioning, installer generation | Claude Code users starting a new JUCE plugin from scratch |
+| **[JUCE-Plugin-Starter](https://github.com/danielraffel/JUCE-Plugin-Starter)** | Claude Code-friendly macOS project template: build automation, code signing, notarization, auto-versioning, installer generation | Claude Code users starting a new macOS JUCE plugin from scratch |
 | **[`danielraffel/visage` fork](https://github.com/danielraffel/visage)** | Visage with macOS-specific patches for JUCE plugin hosting (see PRs below) | Anyone embedding Visage in a macOS JUCE plugin |
 
 ### Patches in the `danielraffel/visage` fork
